@@ -2,7 +2,7 @@
 Новатор — платёжный мониторинг. FastAPI backend.
 Запуск: uvicorn main:app --reload --port 8000
 """
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, Form
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import JSONResponse
@@ -14,7 +14,14 @@ from database import save_month_data, get_month_data, get_all_months, get_last_u
 app = FastAPI(title="Новатор — Платёжный мониторинг", version="1.0.0")
 security = HTTPBasic()
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# CORS — разрешаем все источники явно
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "novator2026")
@@ -27,31 +34,31 @@ def verify_admin(creds: HTTPBasicCredentials = Depends(security)):
                             headers={"WWW-Authenticate": "Basic"})
     return creds.username
 
-# ── публичные эндпоинты ───────────────────────────────────────────────────────
 @app.get("/api/data")
 def get_data(month: str = None):
-    """Данные для дашборда — все месяцы или один."""
     if month:
         return get_month_data(month)
     return get_all_months()
 
 @app.get("/api/status")
 def get_status():
-    """Статус последней загрузки — показывается на дашборде."""
     return get_last_upload()
 
 @app.get("/api/health")
 def health():
     return {"status": "ok", "time": datetime.now().isoformat()}
 
-# ── защищённые эндпоинты (admin) ─────────────────────────────────────────────
+@app.get("/")
+def root():
+    return {"service": "Новатор Платёжный мониторинг", "status": "ok",
+            "docs": "/docs", "health": "/api/health"}
+
 @app.post("/api/upload")
 async def upload_statement(
     file: UploadFile = File(...),
     month: str = Form(...),
     _: str = Depends(verify_admin),
 ):
-    """Ручная загрузка выписки через admin-панель."""
     contents = await file.read()
     try:
         df = pd.read_excel(io.BytesIO(contents))
