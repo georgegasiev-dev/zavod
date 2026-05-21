@@ -34,6 +34,7 @@ def verify_admin(creds: HTTPBasicCredentials = Depends(security)):
                             headers={"WWW-Authenticate": "Basic"})
     return creds.username
 
+# ── публичные эндпоинты ───────────────────────────────────────────────────────
 @app.get("/api/data")
 def get_data(month: str = None):
     if month:
@@ -53,6 +54,7 @@ def root():
     return {"service": "Новатор Платёжный мониторинг", "status": "ok",
             "docs": "/docs", "health": "/api/health"}
 
+# ── защищённые эндпоинты ──────────────────────────────────────────────────────
 @app.post("/api/upload")
 async def upload_statement(
     file: UploadFile = File(...),
@@ -74,3 +76,51 @@ async def upload_statement(
         "unknown": len(result["unknown"]),
         "uploaded_at": datetime.now().isoformat(),
     }
+
+
+# ── ручная классификация нераспознанных ───────────────────────────────────────
+@app.post("/api/classify")
+async def manual_classify(
+    payload: dict,
+    _: str = Depends(verify_admin),
+):
+    """
+    Принимает список {contractor, cat} и обновляет данные месяца.
+    payload = {month: "Май", corrections: [{contractor, cat, week, amount}, ...]}
+    """
+    month = payload.get("month")
+    corrections = payload.get("corrections", [])
+    if not month or not corrections:
+        raise HTTPException(status_code=400, detail="month и corrections обязательны")
+
+    data = get_month_data(month)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Данных за {month} нет")
+
+    CAT_TO_ID = {
+        'Лес':'les','Перевозка леса':'perev_les','Смола':'smola','Плёнка':'plenka',
+        'ГСМ':'gsm','Расходники':'rashod','Свет':'svet','Вывоз мусора':'vuvozmys',
+        'НДС':'nds','НДФЛ':'ndfl','Упаковка':'upakovka','Перевозчик':'perevozch',
+        'ЗП':'zp_avans','Аренда':'arenda','Адм.':'adm',
+    }
+
+    ops = data.get("ops", [])
+    for op in ops:
+        for corr in corrections:
+            if (op.get("contractor","").lower().strip() == corr["contractor"].lower().strip()
+                    and op.get("cat") == "Прочее"):
+                op["cat"] = corr["cat"]
+                row_id = CAT_TO_ID.get(corr["cat"])
+                if row_id and op.get("week", -1) >= 0:
+                    wi = op["week"]
+                    # пересчитываем weeks_out
+                    pass  # пересчёт делается на фронте при следующем fetchData
+
+    data["ops"] = ops
+    # убираем из unknown те, что исправили
+    corrected_names = {c["contractor"].lower().strip() for c in corrections}
+    data["unknown"] = [u for u in data.get("unknown", [])
+                       if u.get("contractor","").lower().strip() not in corrected_names]
+
+    save_month_data(month, data)
+    return {"status": "ok", "corrected": len(corrections)}
