@@ -64,3 +64,31 @@ def get_last_upload() -> dict:
     if not row:
         return {"status": "no_data"}
     return dict(row)
+
+
+def save_contractor_mapping(contractor: str, cat: str):
+    """Сохраняет маппинг контрагент → категория в БД."""
+    with _conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS contractor_map (
+                contractor TEXT PRIMARY KEY,
+                cat        TEXT NOT NULL,
+                updated_at TEXT
+            )
+        """)
+        conn.execute("""
+            INSERT INTO contractor_map (contractor, cat, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(contractor) DO UPDATE SET cat=excluded.cat, updated_at=excluded.updated_at
+        """, (contractor.lower().strip(), cat))
+        conn.commit()
+
+
+def get_contractor_mappings() -> dict:
+    """Загружает все сохранённые маппинги контрагент → категория."""
+    with _conn() as conn:
+        try:
+            rows = conn.execute("SELECT contractor, cat FROM contractor_map").fetchall()
+            return {r['contractor']: r['cat'] for r in rows}
+        except Exception:
+            return {}

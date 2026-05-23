@@ -124,3 +124,36 @@ async def manual_classify(
 
     save_month_data(month, data)
     return {"status": "ok", "corrected": len(corrections)}
+
+
+@app.post("/api/reclassify")
+async def reclassify_op(
+    payload: dict,
+    _: str = Depends(verify_admin),
+):
+    """
+    Меняет категорию платежа и запоминает контрагента в справочнике.
+    payload = {month, contractor, new_cat}
+    """
+    month = payload.get("month")
+    contractor = (payload.get("contractor") or "").strip().lower()
+    new_cat = payload.get("new_cat", "")
+
+    if not month or not contractor or not new_cat:
+        raise HTTPException(status_code=400, detail="month, contractor, new_cat обязательны")
+
+    # 1. Обновляем ops в БД — меняем cat у всех ops с этим контрагентом
+    data = get_month_data(month)
+    if data and data.get("ops"):
+        changed = 0
+        for op in data["ops"]:
+            if (op.get("contractor") or "").strip().lower() == contractor:
+                op["cat"] = new_cat
+                changed += 1
+        if changed:
+            save_month_data(month, data)
+
+    # 2. Сохраняем в persistent справочник контрагентов
+    save_contractor_mapping(contractor, new_cat)
+
+    return {"status": "ok", "contractor": contractor, "new_cat": new_cat, "ops_updated": changed if data else 0}

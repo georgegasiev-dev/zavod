@@ -1,6 +1,10 @@
 """Классификация операций из банковской выписки Райффайзен."""
 import pandas as pd, re
 from datetime import datetime
+try:
+    from database import get_contractor_mappings
+except ImportError:
+    def get_contractor_mappings(): return {}
 
 # Справочник контрагентов → категория
 MANUAL_MAP = {
@@ -84,9 +88,12 @@ MONTH_WEEK_RANGES = {
     'Декабрь':  [(11,30,12,6),(12,7,12,13),(12,14,12,20),(12,21,12,27),(12,28,1,3)],
 }
 
-def _classify(contractor: str, description: str) -> str:
+def _classify(contractor: str, description: str, db_map: dict = None) -> str:
     c = ' '.join((contractor or '').lower().strip().split())
     d = (description or '').lower()
+    # Сначала проверяем пользовательский справочник из БД
+    if db_map and c in db_map:
+        return db_map[c]
     if c in MANUAL_MAP:
         return MANUAL_MAP[c]
     for cat, pattern in KEYWORDS:
@@ -127,6 +134,7 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
     ops        = []
     unknown    = []
 
+    db_map = get_contractor_mappings()
     for _, row in df.iterrows():
         try:
             is_debit = True
@@ -139,7 +147,7 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
             contractor = str(row.get(contr_col, '') or '')
             desc       = str(row.get(desc_col,  '') or '')
             date_val   = row.get(date_col)
-            cat        = _classify(contractor, desc)
+            cat        = _classify(contractor, desc, db_map)
             wi         = _get_week_index(date_val, month)
 
             try:
@@ -179,3 +187,24 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
         'uploaded_at': datetime.now().isoformat(),
         'source': 'manual',
     }
+
+# Добавлено по результатам выписки 22.05.2026
+MANUAL_MAP.update({
+    'ооо "волга-лес"': 'Лес',
+    'ип абакумов александр кузьмич': 'Лес',
+    'ип сироткин сергей сергеевич': 'Лес',
+    'ип слепышев сергей васильевич': 'Лес',
+    'ип грачёв павел иванович': 'Перевозка леса',
+    'ооо "агрозапчасть"': 'Расходники',
+    'ооо "промлайн"': 'Расходники',
+    'ооо "картонснаб"': 'Упаковка',
+    'ооо "федеральная упаковочная компания"': 'Упаковка',
+    'ип куприянов максим валерьевич': 'Расходники',
+    'ао "пф "скб контур"': 'Адм.',
+    'ао "уфанет"': 'Адм.',
+    'ооо "манго телеком"': 'Адм.',
+    'пао "тнс энерго нн"': 'Свет',
+    'ооо "газпромнефть-региональные продажи"': 'ГСМ',
+    'ооо "комус"': 'Расходники',
+    'ооо "исток"': 'Прочие нераспознанные',
+})
