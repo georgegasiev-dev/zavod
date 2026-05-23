@@ -147,7 +147,11 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
             contractor = str(row.get(contr_col, '') or '')
             desc       = str(row.get(desc_col,  '') or '')
             date_val   = row.get(date_col)
-            cat        = _classify(contractor, desc, db_map)
+            # Кредитные операции — всегда "Поступления от клиентов"
+            if not is_debit:
+                cat = 'Поступления от клиентов'
+            else:
+                cat = _classify(contractor, desc, db_map)
             wi         = _get_week_index(date_val, month)
 
             try:
