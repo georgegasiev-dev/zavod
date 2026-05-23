@@ -144,8 +144,8 @@ async def reclassify_op(
 
     # 1. Обновляем ops в БД — меняем cat у всех ops с этим контрагентом
     data = get_month_data(month)
+    changed = 0
     if data and data.get("ops"):
-        changed = 0
         for op in data["ops"]:
             if (op.get("contractor") or "").strip().lower() == contractor:
                 op["cat"] = new_cat
@@ -156,4 +156,4 @@ async def reclassify_op(
     # 2. Сохраняем в persistent справочник контрагентов
     save_contractor_mapping(contractor, new_cat)
 
-    return {"status": "ok", "contractor": contractor, "new_cat": new_cat, "ops_updated": changed if data else 0}
+    return {"status": "ok", "contractor": contractor, "new_cat": new_cat, "ops_updated": changed}
