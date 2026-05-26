@@ -2,16 +2,53 @@
 Новатор — платёжный мониторинг. FastAPI backend.
 Запуск: uvicorn main:app --reload --port 8000
 """
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import JSONResponse
-import pandas as pd, io, json, secrets, os
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+import pandas as pd, io, json, secrets, os, logging
 from datetime import datetime
 from classifier import classify_operations
 from database import save_month_data, get_month_data, get_all_months, get_last_upload
 
-app = FastAPI(title="Новатор — Платёжный мониторинг", version="1.0.0")
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("main")
+
+# ── планировщик ───────────────────────────────────────────────────────────────
+scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
+
+async def scheduled_gmail_sync():
+    """Запускается по расписанию — тянет выписку из Gmail."""
+    log.info("⏰ Плановая синхронизация Gmail...")
+    try:
+        from gmail_fetcher import fetch_and_upload
+        result = fetch_and_upload()
+        log.info("Gmail sync result: %s", result)
+    except Exception as e:
+        log.error("Ошибка плановой синхронизации: %s", e)
+
+# Время синхронизации: каждый день в 10:00 по Москве
+# Настраивается через переменную SYNC_HOUR (по умолчанию 10)
+SYNC_HOUR = int(os.getenv("SYNC_HOUR", "10"))
+SYNC_MINUTE = int(os.getenv("SYNC_MINUTE", "0"))
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    scheduler.add_job(
+        scheduled_gmail_sync,
+        CronTrigger(hour=SYNC_HOUR, minute=SYNC_MINUTE),
+        id="gmail_sync",
+        replace_existing=True,
+    )
+    scheduler.start()
+    log.info("Scheduler started. Gmail sync at %02d:%02d Moscow time.", SYNC_HOUR, SYNC_MINUTE)
+    yield
+    scheduler.shutdown()
+
+app = FastAPI(title="Новатор — Платёжный мониторинг", version="1.0.0", lifespan=lifespan)
 security = HTTPBasic()
 
 # CORS — разрешаем все источники явно
@@ -48,6 +85,28 @@ def get_status():
 @app.get("/api/health")
 def health():
     return {"status": "ok", "time": datetime.now().isoformat()}
+
+@app.post("/api/sync")
+async def manual_sync(_: str = Depends(verify_admin)):
+    """Ручной запуск синхронизации Gmail — без ожидания расписания."""
+    try:
+        from gmail_fetcher import fetch_and_upload
+        result = fetch_and_upload()
+        return {"status": "ok", **result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/sync/status")
+def sync_status(_: str = Depends(verify_admin)):
+    """Следующий запуск по расписанию."""
+    job = scheduler.get_job("gmail_sync")
+    if not job:
+        return {"scheduled": False}
+    return {
+        "scheduled": True,
+        "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+        "sync_time": f"{SYNC_HOUR:02d}:{SYNC_MINUTE:02d} МСК",
+    }
 
 @app.get("/")
 def root():
@@ -157,3 +216,81 @@ async def reclassify_op(
     save_contractor_mapping(contractor, new_cat)
 
     return {"status": "ok", "contractor": contractor, "new_cat": new_cat, "ops_updated": changed}
+
+
+# ── справочник контрагентов ───────────────────────────────────────────────────
+@app.get("/api/contractors")
+def get_contractors():
+    """Полный справочник контрагентов с суммами из ops."""
+    from database import get_contractor_mappings, get_all_months
+    db_map = get_contractor_mappings()  # {contractor: cat}
+    all_data = get_all_months()
+
+    # Собираем суммы и даты по всем контрагентам из ops
+    contractor_stats = {}  # {contractor: {total, first_seen, cat, comment}}
+    for month_data in all_data.values():
+        for op in month_data.get('ops', []):
+            if not op.get('is_debit'):
+                continue
+            c = (op.get('contractor') or '').strip()
+            if not c:
+                continue
+            cl = c.lower()
+            if cl not in contractor_stats:
+                contractor_stats[cl] = {
+                    'name': c,
+                    'total': 0,
+                    'first_seen': op.get('date', ''),
+                    'cat': op.get('cat', 'Прочие нераспознанные'),
+                    'comment': '',
+                }
+            contractor_stats[cl]['total'] += op.get('amount', 0)
+            # Берём самую раннюю дату
+            d = op.get('date', '')
+            if d and d < contractor_stats[cl]['first_seen']:
+                contractor_stats[cl]['first_seen'] = d
+
+    # Загружаем сохранённые данные (категории, комментарии)
+    saved = get_contractor_details()
+    for cl, stat in contractor_stats.items():
+        if cl in db_map:
+            stat['cat'] = db_map[cl]
+        if cl in saved:
+            stat['comment'] = saved[cl].get('comment', '')
+            if saved[cl].get('added_at'):
+                stat['first_seen'] = saved[cl]['added_at']
+
+    result = sorted(contractor_stats.values(), key=lambda x: -x['total'])
+    return result
+
+
+@app.post("/api/contractors/update")
+async def update_contractor(
+    payload: dict,
+    _: str = Depends(verify_admin),
+):
+    """Обновить категорию и/или комментарий контрагента."""
+    contractor = (payload.get("contractor") or "").strip().lower()
+    new_cat = payload.get("cat")
+    comment = payload.get("comment")
+    if not contractor:
+        raise HTTPException(status_code=400, detail="contractor обязателен")
+
+    from database import save_contractor_mapping, save_contractor_comment
+    if new_cat is not None:
+        save_contractor_mapping(contractor, new_cat)
+        # Обновляем в ops всех месяцев
+        from database import get_all_months, save_month_data
+        all_data = get_all_months()
+        for month, data in all_data.items():
+            changed = False
+            for op in data.get('ops', []):
+                if (op.get('contractor') or '').strip().lower() == contractor:
+                    op['cat'] = new_cat
+                    changed = True
+            if changed:
+                save_month_data(month, data)
+    if comment is not None:
+        save_contractor_comment(contractor, comment)
+
+    return {"status": "ok"}
