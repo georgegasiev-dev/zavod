@@ -12,7 +12,8 @@ from apscheduler.triggers.cron import CronTrigger
 import pandas as pd, io, json, secrets, os, logging
 from datetime import datetime
 from classifier import classify_operations
-from database import save_month_data, merge_month_data, get_month_data, get_all_months, get_last_upload
+from database import (save_month_data, merge_month_data, get_month_data, get_all_months,
+                       get_last_upload, save_contractor_mapping, save_contractor_comment)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("main")
@@ -272,22 +273,19 @@ async def update_contractor(
     _: str = Depends(verify_admin),
 ):
     """Обновить категорию и/или комментарий контрагента."""
-    contractor = (payload.get("contractor") or "").strip().lower()
+    contractor = ' '.join((payload.get("contractor") or "").lower().strip().split())
     new_cat = payload.get("cat")
     comment = payload.get("comment")
     if not contractor:
         raise HTTPException(status_code=400, detail="contractor обязателен")
 
-    from database import save_contractor_mapping, save_contractor_comment
     if new_cat is not None:
         save_contractor_mapping(contractor, new_cat)
-        # Обновляем в ops всех месяцев
-        from database import get_all_months, save_month_data
         all_data = get_all_months()
         for month, data in all_data.items():
             changed = False
             for op in data.get('ops', []):
-                if (op.get('contractor') or '').strip().lower() == contractor:
+                if ' '.join((op.get('contractor') or '').lower().strip().split()) == contractor:
                     op['cat'] = new_cat
                     changed = True
             if changed:
