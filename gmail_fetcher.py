@@ -19,7 +19,7 @@ from email.header import decode_header
 import pandas as pd
 
 from classifier import classify_operations
-from database import save_month_data
+from database import merge_month_data
 
 log = logging.getLogger("gmail_fetcher")
 
@@ -167,7 +167,7 @@ def fetch_and_upload() -> dict:
                 df = pd.read_excel(io.BytesIO(xlsx_data))
                 classified = classify_operations(df, month)
                 classified["source"] = "gmail_auto"
-                save_month_data(month, classified)
+                merge_month_data(month, classified)
 
                 # Помечаем письмо прочитанным
                 imap.store(msg_id, "+FLAGS", "\\Seen")
