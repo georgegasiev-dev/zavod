@@ -295,3 +295,226 @@ async def update_contractor(
         save_contractor_comment(contractor, comment)
 
     return {"status": "ok"}
+
+# ── MCP сервер (SSE transport) ────────────────────────────────────────────────
+from fastapi.responses import StreamingResponse
+import asyncio, uuid
+
+SESSIONS: dict[str, asyncio.Queue] = {}
+
+MCP_TOOLS = [
+    {"name": "get_overview",
+     "description": "Обзор по всем загруженным месяцам: расходы, поступления, число операций.",
+     "inputSchema": {"type": "object", "properties": {}, "required": []}},
+    {"name": "get_monthly_summary",
+     "description": "Сводка расходов по категориям за месяц с разбивкой по неделям.",
+     "inputSchema": {"type": "object",
+                     "properties": {"month": {"type": "string", "description": "Май | Июнь | Июль | Август | Сентябрь | Октябрь | Ноябрь | Декабрь"}},
+                     "required": ["month"]}},
+    {"name": "get_week_details",
+     "description": "Все операции за конкретную неделю месяца.",
+     "inputSchema": {"type": "object",
+                     "properties": {
+                         "month": {"type": "string"},
+                         "week": {"type": "integer", "description": "1–5"},
+                         "category": {"type": "string", "description": "Фильтр по категории (необязательно)"}},
+                     "required": ["month", "week"]}},
+    {"name": "get_unknown_payments",
+     "description": "Список нераспознанных платежей за месяц.",
+     "inputSchema": {"type": "object",
+                     "properties": {"month": {"type": "string"}},
+                     "required": ["month"]}},
+    {"name": "get_contractors",
+     "description": "Справочник контрагентов с суммами и категориями.",
+     "inputSchema": {"type": "object",
+                     "properties": {
+                         "search": {"type": "string", "description": "Поиск по имени"},
+                         "top": {"type": "integer", "description": "Сколько строк вернуть (до 100)"}}}},
+    {"name": "reclassify_contractor",
+     "description": "Изменить категорию контрагента навсегда (сохраняется в справочнике).",
+     "inputSchema": {"type": "object",
+                     "properties": {
+                         "contractor_name": {"type": "string"},
+                         "new_category": {"type": "string",
+                             "description": "Лес | Перевозка леса | Смола | Плёнка | ГСМ | Расходники | Свет | Вывоз мусора | НДС | НДФЛ | Упаковка | Перевозчик | ЗП | Аренда | Адм. | Поступления от клиентов | Прочие нераспознанные"}},
+                     "required": ["contractor_name", "new_category"]}},
+    {"name": "search_operations",
+     "description": "Поиск операций по имени контрагента или назначению платежа.",
+     "inputSchema": {"type": "object",
+                     "properties": {
+                         "query": {"type": "string"},
+                         "month": {"type": "string", "description": "Ограничить поиск месяцем (необязательно)"}},
+                     "required": ["query"]}},
+]
+
+VALID_CATS = ['Лес','Перевозка леса','Смола','Плёнка','ГСМ','Расходники','Свет',
+              'Вывоз мусора','НДС','НДФЛ','Упаковка','Перевозчик','ЗП','Аренда',
+              'Адм.','Поступления от клиентов','Прочие нераспознанные']
+
+def _norm(s): return ' '.join((s or '').lower().strip().split())
+
+def _call_tool(name: str, args: dict) -> str:
+    from database import (get_month_data, get_all_months, get_contractor_mappings,
+                           save_contractor_mapping, save_month_data as _smd)
+    if name == "get_overview":
+        all_data = get_all_months()
+        if not all_data: return "Данных нет."
+        lines = ["# Обзор по месяцам\n"]
+        for month, data in all_data.items():
+            tout = sum(data.get('weeks_out', [])); tin = sum(data.get('weeks_in', []))
+            lines += [f"## {month}", f"- Расходы: {tout:,.0f} ₽", f"- Поступления: {tin:,.0f} ₽",
+                      f"- Операций: {data.get('total_ops',0)} | Нераспознанных: {len(data.get('unknown',[]))}\n"]
+        return "\n".join(lines)
+
+    if name == "get_monthly_summary":
+        month = args.get("month","")
+        data = get_month_data(month)
+        if not data: return f"Данных за {month} нет."
+        cats = data.get('cats',[]); wo = data.get('weeks_out',[]); wi2 = data.get('weeks_in',[])
+        lines = [f"# {month} — сводка\n",
+                 f"Расходы: {sum(wo):,.0f} ₽  |  Поступления: {sum(wi2):,.0f} ₽  |  Операций: {data.get('total_ops',0)}\n",
+                 "## По категориям"]
+        for c in cats:
+            if c['name'] != 'Поступления от клиентов':
+                lines.append(f"- {c['name']}: {c['fact']:,.0f} ₽")
+        lines.append("\n## По неделям (расходы)")
+        for i,w in enumerate(wo): lines.append(f"- Нед {i+1}: {w:,.0f} ₽")
+        unk = data.get('unknown',[])
+        if unk: lines.append(f"\n⚠️ Нераспознанных: {len(unk)} шт.")
+        return "\n".join(lines)
+
+    if name == "get_week_details":
+        month = args.get("month",""); week = int(args.get("week",1)); cat = args.get("category","")
+        data = get_month_data(month)
+        if not data: return f"Данных за {month} нет."
+        ops = [o for o in data.get('ops',[]) if o.get('week')==week-1 and o.get('is_debit')]
+        if cat: ops = [o for o in ops if o.get('cat')==cat]
+        if not ops: return f"Операций за неделю {week} нет."
+        total = sum(o.get('amount',0) for o in ops)
+        lines = [f"# {month}, неделя {week}{' — '+cat if cat else ''} ({len(ops)} оп., {total:,.0f} ₽)\n"]
+        for o in sorted(ops, key=lambda x: x.get('date','')):
+            lines.append(f"- {o.get('date','')} | {o.get('contractor','')[:40]} | {o.get('cat','')} | {o.get('amount',0):,.0f} ₽")
+        return "\n".join(lines)
+
+    if name == "get_unknown_payments":
+        month = args.get("month","")
+        data = get_month_data(month)
+        if not data: return f"Данных за {month} нет."
+        ops = [o for o in data.get('ops',[]) if o.get('cat')=='Прочие нераспознанные' and o.get('is_debit')]
+        if not ops: return f"Нераспознанных за {month} нет ✓"
+        lines = [f"# Нераспознанные — {month} ({len(ops)} шт., {sum(o.get('amount',0) for o in ops):,.0f} ₽)\n"]
+        for o in sorted(ops, key=lambda x: -x.get('amount',0)):
+            lines.append(f"- **{o.get('contractor','')[:50]}** | {o.get('amount',0):,.0f} ₽\n  {o.get('desc','')[:80]}")
+        return "\n".join(lines)
+
+    if name == "get_contractors":
+        search = args.get("search",""); top = min(int(args.get("top",30)), 100)
+        all_data = get_all_months(); db_map = get_contractor_mappings(); stats = {}
+        for md in all_data.values():
+            for op in md.get('ops',[]):
+                if not op.get('is_debit'): continue
+                c = (op.get('contractor') or '').strip(); cl = c.lower()
+                if not cl: continue
+                if cl not in stats: stats[cl] = {'name':c,'total':0,'cat':db_map.get(cl,op.get('cat',''))}
+                stats[cl]['total'] += op.get('amount',0)
+                if cl in db_map: stats[cl]['cat'] = db_map[cl]
+        items = sorted(stats.values(), key=lambda x: -x['total'])
+        if search: items = [i for i in items if search.lower() in i['name'].lower()]
+        items = items[:top]
+        if not items: return f"Контрагентов по запросу «{search}» не найдено."
+        lines = [f"# Контрагенты ({len(items)})\n"]
+        for c in items: lines.append(f"- **{c['name']}** | {c['total']:,.0f} ₽ | {c['cat']}")
+        return "\n".join(lines)
+
+    if name == "reclassify_contractor":
+        cname = args.get("contractor_name",""); new_cat = args.get("new_category","")
+        if new_cat not in VALID_CATS: return f"Неверная категория. Доступные: {', '.join(VALID_CATS)}"
+        norm = _norm(cname); save_contractor_mapping(norm, new_cat)
+        all_data = get_all_months(); changed = 0
+        for month, data in all_data.items():
+            upd = False
+            for op in data.get('ops',[]):
+                if _norm(op.get('contractor','')) == norm: op['cat'] = new_cat; changed += 1; upd = True
+            if upd: _smd(month, data)
+        return f"✅ {cname} → {new_cat}. Обновлено операций: {changed}"
+
+    if name == "search_operations":
+        query = args.get("query",""); month_filter = args.get("month","")
+        ql = query.lower()
+        all_data = {month_filter: get_month_data(month_filter)} if month_filter else get_all_months()
+        results = []
+        for m, data in all_data.items():
+            if not data: continue
+            for op in data.get('ops',[]):
+                if not op.get('is_debit'): continue
+                if ql in (op.get('contractor') or '').lower() or ql in (op.get('desc') or '').lower():
+                    results.append({**op, '_month': m})
+        if not results: return f"Ничего не найдено по «{query}»."
+        total = sum(r.get('amount',0) for r in results)
+        lines = [f"# Поиск «{query}» — {len(results)} оп., {total:,.0f} ₽\n"]
+        for r in sorted(results, key=lambda x: x.get('date',''), reverse=True)[:50]:
+            lines.append(f"- {r.get('date','')} | {r['_month']} | {r.get('contractor','')[:40]} | {r.get('cat','')} | {r.get('amount',0):,.0f} ₽")
+        if len(results) > 50: lines.append(f"\n…ещё {len(results)-50} операций")
+        return "\n".join(lines)
+
+    return f"Неизвестный инструмент: {name}"
+
+
+@app.get("/mcp/sse")
+async def mcp_sse(request: Request):
+    session_id = str(uuid.uuid4())
+    queue: asyncio.Queue = asyncio.Queue()
+    SESSIONS[session_id] = queue
+
+    async def generator():
+        try:
+            yield f"event: endpoint\ndata: /mcp/messages/{session_id}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield f"event: message\ndata: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        finally:
+            SESSIONS.pop(session_id, None)
+
+    return StreamingResponse(generator(), media_type="text/event-stream",
+                             headers={"Cache-Control":"no-cache","Connection":"keep-alive",
+                                      "Access-Control-Allow-Origin":"*"})
+
+
+@app.post("/mcp/messages/{session_id}")
+async def mcp_messages(session_id: str, request: Request):
+    body = await request.json()
+    method = body.get("method","")
+    params = body.get("params", {})
+    rid = body.get("id")
+
+    if method == "initialize":
+        result = {"protocolVersion": "2024-11-05",
+                  "capabilities": {"tools": {}},
+                  "serverInfo": {"name": "Новатор — Платёжный мониторинг", "version": "1.0.0"}}
+    elif method == "notifications/initialized":
+        return JSONResponse({"jsonrpc":"2.0","id":rid,"result":{}})
+    elif method == "tools/list":
+        result = {"tools": MCP_TOOLS}
+    elif method == "tools/call":
+        tool_name = params.get("name","")
+        tool_args  = params.get("arguments", {})
+        try:
+            text = _call_tool(tool_name, tool_args)
+        except Exception as e:
+            text = f"Ошибка: {e}"
+        result = {"content": [{"type": "text", "text": text}]}
+    else:
+        result = {}
+
+    response = {"jsonrpc": "2.0", "id": rid, "result": result}
+
+    # Отправляем в SSE-очередь если сессия жива
+    if session_id in SESSIONS:
+        await SESSIONS[session_id].put(response)
+
+    return JSONResponse(response)
