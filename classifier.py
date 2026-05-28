@@ -137,10 +137,25 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
     db_map = get_contractor_mappings()
     for _, row in df.iterrows():
         try:
-            is_debit = True
+            raw_debit  = float(row.get(debit_col,  0) or 0) if debit_col  else 0.0
+            raw_credit = float(row.get(credit_col, 0) or 0) if credit_col else 0.0
+
             if type_col:
-                is_debit = bool(re.search(r'дебет|списан', str(row.get(type_col, '')).lower()))
-            amt = float(row.get(debit_col if is_debit else credit_col, 0) or 0)
+                type_str = str(row.get(type_col, '')).lower()
+                is_debit = bool(re.search(r'дебет|списан|расход', type_str))
+            elif debit_col and credit_col:
+                if raw_debit > 0 and raw_credit == 0:
+                    is_debit = True
+                elif raw_credit > 0 and raw_debit == 0:
+                    is_debit = False
+                elif raw_debit > 0:
+                    is_debit = True
+                else:
+                    continue
+            else:
+                is_debit = True
+
+            amt = raw_debit if is_debit else raw_credit
             if not (amt > 0):
                 continue
 
