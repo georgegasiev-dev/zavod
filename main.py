@@ -12,7 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 import pandas as pd, io, json, secrets, os, logging
 from datetime import datetime
 from classifier import classify_operations
-from database import save_month_data, get_month_data, get_all_months, get_last_upload
+from database import save_month_data, merge_month_data, get_month_data, get_all_months, get_last_upload
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("main")
@@ -127,7 +127,7 @@ async def upload_statement(
         raise HTTPException(status_code=400, detail=f"Ошибка чтения файла: {e}")
 
     result = classify_operations(df, month)
-    save_month_data(month, result)
+    merge_month_data(month, result)
     return {
         "status": "ok",
         "month": month,
@@ -195,22 +195,24 @@ async def reclassify_op(
     payload = {month, contractor, new_cat}
     """
     month = payload.get("month")
-    contractor = (payload.get("contractor") or "").strip().lower()
+    contractor = ' '.join((payload.get("contractor") or "").lower().strip().split())
     new_cat = payload.get("new_cat", "")
 
     if not month or not contractor or not new_cat:
         raise HTTPException(status_code=400, detail="month, contractor, new_cat обязательны")
 
-    # 1. Обновляем ops в БД — меняем cat у всех ops с этим контрагентом
-    data = get_month_data(month)
+    # 1. Обновляем ops в БД — меняем cat у всех ops с этим контрагентом (во всех месяцах)
+    all_data = get_all_months()
     changed = 0
-    if data and data.get("ops"):
-        for op in data["ops"]:
-            if (op.get("contractor") or "").strip().lower() == contractor:
+    for m, data in all_data.items():
+        month_changed = False
+        for op in data.get("ops", []):
+            if ' '.join((op.get("contractor") or "").lower().strip().split()) == contractor:
                 op["cat"] = new_cat
                 changed += 1
-        if changed:
-            save_month_data(month, data)
+                month_changed = True
+        if month_changed:
+            save_month_data(m, data)
 
     # 2. Сохраняем в persistent справочник контрагентов
     save_contractor_mapping(contractor, new_cat)
