@@ -14,6 +14,7 @@ from datetime import datetime
 from classifier import classify_operations
 from database import (save_month_data, merge_month_data, get_month_data, get_all_months,
                        get_last_upload, save_contractor_mapping, save_contractor_comment)
+from mcp_server import mcp
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("main")
@@ -63,6 +64,9 @@ app.add_middleware(
 
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "novator2026")
+
+# Монтируем MCP сервер на /mcp
+app.mount("/mcp", mcp.get_asgi_app())
 
 def verify_admin(creds: HTTPBasicCredentials = Depends(security)):
     ok = (secrets.compare_digest(creds.username.encode(), ADMIN_USER.encode()) and
