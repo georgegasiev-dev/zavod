@@ -88,6 +88,23 @@ MONTH_WEEK_RANGES = {
     'Декабрь':  [(11,30,12,6),(12,7,12,13),(12,14,12,20),(12,21,12,27),(12,28,1,3)],
 }
 
+# Календарный месяц → русское название (для группировки операций по их фактической дате)
+_CAL_MONTH = {5:'Май',6:'Июнь',7:'Июль',8:'Август',9:'Сентябрь',10:'Октябрь',11:'Ноябрь',12:'Декабрь'}
+
+def month_for_date(date_val, default: str = 'Май') -> str:
+    """Возвращает русское название месяца по дате операции."""
+    try:
+        d = pd.Timestamp(date_val)
+        # Календарный месяц
+        if d.month in _CAL_MONTH:
+            return _CAL_MONTH[d.month]
+        # Апрель 27-30 относится к Маю (неделя 9: 27 апр - 3 мая)
+        if d.month == 4 and d.day >= 27:
+            return 'Май'
+    except Exception:
+        pass
+    return default
+
 def _classify(contractor: str, description: str, db_map: dict = None) -> str:
     c = ' '.join((contractor or '').lower().strip().split())
     d = (description or '').lower()
