@@ -163,11 +163,25 @@ def fetch_and_upload() -> dict:
 
                 log.info("Обрабатываем файл '%s' → месяц '%s'", xlsx_name, month)
 
-                # Читаем и классифицируем
+                # Читаем и группируем по фактическому месяцу даты
                 df = pd.read_excel(io.BytesIO(xlsx_data))
-                classified = classify_operations(df, month)
-                classified["source"] = "gmail_auto"
-                merge_month_data(month, classified)
+                from classifier import _find_col, month_for_date
+                date_col = _find_col(df, 'дата')
+                if date_col:
+                    df['_target_month'] = df[date_col].apply(lambda x: month_for_date(x, month))
+                else:
+                    df['_target_month'] = month
+
+                processed_months = []
+                total_ops, total_unknown = 0, 0
+                for m, sub_df in df.groupby('_target_month'):
+                    sub_df = sub_df.drop(columns=['_target_month'])
+                    classified = classify_operations(sub_df, m)
+                    classified["source"] = "gmail_auto"
+                    merge_month_data(m, classified)
+                    total_ops += classified.get("total_ops", 0)
+                    total_unknown += len(classified.get("unknown", []))
+                    processed_months.append(m)
 
                 # Помечаем письмо прочитанным
                 imap.store(msg_id, "+FLAGS", "\\Seen")
@@ -175,9 +189,9 @@ def fetch_and_upload() -> dict:
                 result["processed"] += 1
                 result["details"].append({
                     "file": xlsx_name,
-                    "month": month,
-                    "ops": classified["total_ops"],
-                    "unknown": len(classified.get("unknown", [])),
+                    "months": processed_months,
+                    "ops": total_ops,
+                    "unknown": total_unknown,
                 })
                 log.info("Загружено: %s → %s (%d операций)", xlsx_name, month, classified["total_ops"])
 
