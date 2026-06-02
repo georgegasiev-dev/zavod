@@ -128,13 +128,31 @@ async def upload_statement(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Ошибка чтения файла: {e}")
 
-    result = classify_operations(df, month)
-    merge_month_data(month, result)
+    # Группируем строки по фактическому месяцу даты — операции с июньской датой
+    # пойдут в Июнь, даже если при загрузке выбран Май
+    from classifier import _find_col, month_for_date
+    date_col = _find_col(df, 'дата')
+
+    if date_col:
+        df['_target_month'] = df[date_col].apply(lambda x: month_for_date(x, month))
+    else:
+        df['_target_month'] = month
+
+    total_ops, total_unknown = 0, 0
+    months_updated = []
+    for m, sub_df in df.groupby('_target_month'):
+        sub_df = sub_df.drop(columns=['_target_month'])
+        result = classify_operations(sub_df, m)
+        merge_month_data(m, result)
+        total_ops    += result.get("total_ops", 0)
+        total_unknown += len(result.get("unknown", []))
+        months_updated.append(m)
+
     return {
         "status": "ok",
-        "month": month,
-        "processed": result["total_ops"],
-        "unknown": len(result["unknown"]),
+        "months": months_updated,
+        "processed": total_ops,
+        "unknown": total_unknown,
         "uploaded_at": datetime.now().isoformat(),
     }
 
