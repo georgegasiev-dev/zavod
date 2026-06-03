@@ -353,19 +353,21 @@ async def cleanup_duplicates(_: str = Depends(verify_admin)):
             grouped[correct_month] = []
         grouped[correct_month].append(op)
 
-    # 3. В каждом месяце удаляем дубликаты по ключу (date+contractor+amount+desc[:40])
+    # 3. В каждом месяце удаляем дубликаты по полному совпадению
+    #    date + contractor + amount + desc (без счётчиков!)
     cleaned: dict[str, list] = {}
     removed_dups = 0
     for month, ops in grouped.items():
         seen_keys = set()
         unique = []
-        # Используем такой же счётчик внутри месяца, как на фронтенде
-        from collections import defaultdict
-        counter = defaultdict(int)
         for op in ops:
-            base = f"{op.get('date','')}|{op.get('contractor','')}|{op.get('amount',0)}|{op.get('desc','')[:40]}"
-            counter[base] += 1
-            key = f"{base}|#{counter[base]}"
+            key = (
+                op.get('date', ''),
+                op.get('contractor', ''),
+                op.get('amount', 0),
+                op.get('desc', ''),
+                op.get('is_debit', True),
+            )
             if key in seen_keys:
                 removed_dups += 1
                 continue
