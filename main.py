@@ -314,6 +314,137 @@ async def update_contractor(
 
     return {"status": "ok"}
 
+
+@app.post("/api/cleanup")
+async def cleanup_duplicates(_: str = Depends(verify_admin)):
+    """
+    Разовая чистка БД: переносит операции в правильные месяцы по их датам
+    и удаляет полные дубликаты (одинаковые date+contractor+amount+desc).
+    """
+    from classifier import month_for_date, MONTH_WEEK_RANGES
+    import pandas as pd
+
+    all_data = get_all_months()
+    if not all_data:
+        return {"status": "ok", "message": "База пуста"}
+
+    # 1. Собираем все операции изо всех месяцев
+    all_ops = []
+    for month, data in all_data.items():
+        for op in data.get('ops', []):
+            all_ops.append(op)
+
+    # 2. Группируем операции по их правильному месяцу (по дате)
+    grouped: dict[str, list] = {}
+    for op in all_ops:
+        date_str = op.get('date', '')
+        # date в формате DD.MM.YYYY
+        try:
+            parts = date_str.split('.')
+            if len(parts) == 3:
+                d = pd.Timestamp(year=int(parts[2]), month=int(parts[1]), day=int(parts[0]))
+            else:
+                d = pd.Timestamp(date_str)
+            correct_month = month_for_date(d)
+        except Exception:
+            correct_month = 'Май'  # fallback
+
+        if correct_month not in grouped:
+            grouped[correct_month] = []
+        grouped[correct_month].append(op)
+
+    # 3. В каждом месяце удаляем дубликаты по ключу (date+contractor+amount+desc[:40])
+    cleaned: dict[str, list] = {}
+    removed_dups = 0
+    for month, ops in grouped.items():
+        seen_keys = set()
+        unique = []
+        # Используем такой же счётчик внутри месяца, как на фронтенде
+        from collections import defaultdict
+        counter = defaultdict(int)
+        for op in ops:
+            base = f"{op.get('date','')}|{op.get('contractor','')}|{op.get('amount',0)}|{op.get('desc','')[:40]}"
+            counter[base] += 1
+            key = f"{base}|#{counter[base]}"
+            if key in seen_keys:
+                removed_dups += 1
+                continue
+            seen_keys.add(key)
+            unique.append(op)
+        cleaned[month] = unique
+
+    # 4. Пересчитываем weeks_out/weeks_in/cats/total_ops/unknown для каждого месяца
+    from classifier import _get_week_index
+    result_stats = {}
+    for month, ops in cleaned.items():
+        weeks_out = [0.0] * 5
+        weeks_in  = [0.0] * 5
+        cat_totals: dict = {}
+        unknown = []
+
+        for op in ops:
+            # пересчитываем правильный week index для этого месяца
+            date_str = op.get('date', '')
+            try:
+                parts = date_str.split('.')
+                if len(parts) == 3:
+                    d = pd.Timestamp(year=int(parts[2]), month=int(parts[1]), day=int(parts[0]))
+                else:
+                    d = pd.Timestamp(date_str)
+                op['week'] = _get_week_index(d, month)
+            except Exception:
+                op['week'] = -1
+
+            amt = op.get('amount', 0) or 0
+            wi  = op.get('week', -1)
+            if op.get('is_debit'):
+                if 0 <= wi < 5:
+                    weeks_out[wi] += amt
+                cat = op.get('cat', '')
+                if cat:
+                    cat_totals[cat] = cat_totals.get(cat, 0) + amt
+                if op.get('cat') == 'Прочие нераспознанные':
+                    unknown.append({
+                        'contractor': op.get('contractor','')[:80],
+                        'desc': op.get('desc','')[:80],
+                        'amount': op.get('amount', 0),
+                    })
+            else:
+                if 0 <= wi < 5:
+                    weeks_in[wi] += amt
+
+        new_data = {
+            'month': month,
+            'weeks_out': [round(x) for x in weeks_out],
+            'weeks_in':  [round(x) for x in weeks_in],
+            'cats': [{'name': k, 'fact': round(v)}
+                     for k, v in sorted(cat_totals.items(), key=lambda x: -x[1])],
+            'ops': ops,
+            'total_ops': len(ops),
+            'unknown': unknown,
+            'uploaded_at': datetime.now().isoformat(),
+            'source': 'cleanup',
+        }
+        save_month_data(month, new_data)
+        result_stats[month] = {'ops': len(ops), 'expenses': round(sum(weeks_out)),
+                               'income': round(sum(weeks_in))}
+
+    # 5. Удаляем «пустые» / устаревшие месяцы которых нет в cleaned (Февраль и т.п.)
+    from database import _conn
+    with _conn() as conn:
+        for month in list(all_data.keys()):
+            if month not in cleaned:
+                conn.execute("DELETE FROM month_data WHERE month=?", (month,))
+        conn.commit()
+
+    return {
+        "status": "ok",
+        "removed_duplicates": removed_dups,
+        "months": result_stats,
+        "total_ops_in_db": sum(len(v) for v in cleaned.values()),
+    }
+
+
 # ── MCP сервер (SSE transport) ────────────────────────────────────────────────
 from fastapi.responses import StreamingResponse
 import asyncio, uuid
