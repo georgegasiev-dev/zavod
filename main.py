@@ -23,14 +23,25 @@ log = logging.getLogger("main")
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
 async def scheduled_gmail_sync():
-    """Запускается по расписанию — тянет выписку из Gmail."""
-    log.info("⏰ Плановая синхронизация Gmail...")
-    try:
-        from gmail_fetcher import fetch_and_upload
-        result = fetch_and_upload()
-        log.info("Gmail sync result: %s", result)
-    except Exception as e:
-        log.error("Ошибка плановой синхронизации: %s", e)
+    """Запускается по расписанию — тянет выписку из Gmail или Raiffeisen API."""
+    from raiffeisen_api import load_token, CLIENT_ID
+    # Если настроен Raiffeisen API — используем его, иначе Gmail
+    if CLIENT_ID and load_token():
+        log.info("⏰ Синхронизация через Raiffeisen API...")
+        try:
+            from raiffeisen_api import fetch_and_load
+            result = fetch_and_load()
+            log.info("Raiffeisen sync: %s", result)
+        except Exception as e:
+            log.error("Ошибка Raiffeisen sync: %s", e)
+    else:
+        log.info("⏰ Синхронизация через Gmail...")
+        try:
+            from gmail_fetcher import fetch_and_upload
+            result = fetch_and_upload()
+            log.info("Gmail sync: %s", result)
+        except Exception as e:
+            log.error("Ошибка Gmail sync: %s", e)
 
 async def scheduled_tg_report():
     """Отправляет еженедельный отчёт в Telegram."""
@@ -445,6 +456,70 @@ async def update_contractor(
         save_contractor_comment(contractor, comment)
 
     return {"status": "ok"}
+
+
+# ── Raiffeisen API ────────────────────────────────────────────────────────────
+
+@app.get("/api/raiffeisen/auth")
+def raiffeisen_auth(_: str = Depends(verify_admin)):
+    """Шаг 1 — редирект на авторизацию в Райффайзен."""
+    from raiffeisen_api import get_auth_url
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(get_auth_url())
+
+
+@app.get("/api/raiffeisen/callback")
+async def raiffeisen_callback(code: str = None, state: str = None, error: str = None):
+    """Шаг 2 — получаем code и обмениваем на токен."""
+    if error:
+        return {"status": "error", "error": error}
+    if not code:
+        return {"status": "error", "detail": "Нет authorization code"}
+    try:
+        from raiffeisen_api import exchange_code
+        token = exchange_code(code)
+        return {
+            "status": "ok",
+            "message": "✅ Авторизация прошла успешно! Выписки теперь будут загружаться автоматически.",
+            "expires_in": token.get("expires_in"),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/raiffeisen/sync")
+async def raiffeisen_sync(
+    date_from: str = None,
+    date_to:   str = None,
+    _: str = Depends(verify_admin),
+):
+    """Ручная синхронизация через Raiffeisen API."""
+    try:
+        from raiffeisen_api import fetch_and_load
+        result = fetch_and_load(date_from, date_to)
+        return {"status": "ok", **result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/raiffeisen/status")
+def raiffeisen_status(_: str = Depends(verify_admin)):
+    """Статус авторизации Raiffeisen API."""
+    from raiffeisen_api import load_token, get_auth_url, CLIENT_ID
+    if not CLIENT_ID:
+        return {"status": "not_configured", "message": "RAIFFEISEN_CLIENT_ID не задан"}
+    token = load_token()
+    if not token:
+        return {"status": "not_authorized", "auth_url": get_auth_url()}
+    from datetime import datetime, timedelta
+    saved_at   = datetime.fromisoformat(token.get("saved_at", "2000-01-01"))
+    expires_in = int(token.get("expires_in", 3600))
+    expires_at = saved_at + timedelta(seconds=expires_in)
+    return {
+        "status":     "authorized",
+        "expires_at": expires_at.isoformat(),
+        "has_refresh": bool(token.get("refresh_token")),
+    }
 
 
 @app.post("/api/cleanup")
