@@ -470,7 +470,13 @@ MCP_TOOLS = [
                          "week": {"type": "integer", "description": "1–5"},
                          "category": {"type": "string", "description": "Фильтр по категории (необязательно)"}},
                      "required": ["month", "week"]}},
-    {"name": "get_unknown_payments",
+    {"name": "get_incoming_payments",
+     "description": "Получить список поступлений от клиентов за неделю или весь месяц.",
+     "inputSchema": {"type": "object",
+                     "properties": {
+                         "month": {"type": "string", "description": "Май | Июнь | …"},
+                         "week":  {"type": "integer", "description": "Номер недели 1–5 (необязательно, если не указан — весь месяц)"}},
+                     "required": ["month"]}},
      "description": "Список нераспознанных платежей за месяц.",
      "inputSchema": {"type": "object",
                      "properties": {"month": {"type": "string"}},
@@ -608,7 +614,25 @@ def _call_tool(name: str, args: dict) -> str:
         if len(results) > 50: lines.append(f"\n…ещё {len(results)-50} операций")
         return "\n".join(lines)
 
-    return f"Неизвестный инструмент: {name}"
+    if name == "get_incoming_payments":
+        month = args.get("month",""); week = args.get("week")
+        data = get_month_data(month)
+        if not data: return f"Данных за {month} нет."
+        ops = [op for op in data.get('ops',[]) if not op.get('is_debit') and op.get('amount',0) > 0]
+        if week is not None:
+            ops = [op for op in ops if op.get('week') == week - 1]
+        if not ops:
+            suffix = f" неделю {week}" if week else ""
+            return f"Поступлений за {month}{suffix} нет."
+        ops_sorted = sorted(ops, key=lambda x: -x.get('amount',0))
+        total = sum(op.get('amount',0) for op in ops_sorted)
+        period = f"{month}, неделя {week}" if week else month
+        lines = [f"# Поступления — {period} ({len(ops_sorted)} платежей, {total:,.0f} ₽)\n"]
+        for op in ops_sorted:
+            lines.append(f"- {op.get('date','')} | {op.get('contractor','')[:50]} | {op.get('amount',0):,.0f} ₽")
+        return "\n".join(lines)
+
+
 
 
 @app.get("/mcp/sse")
