@@ -4,8 +4,8 @@ Raiffeisen Business API — выписки через Refresh-токен из Р
 Переменные окружения (Railway → Variables):
   RAIFFEISEN_CLIENT_ID     — Client ID из API-оркестратора РБО
   RAIFFEISEN_CLIENT_SECRET — Client Secret из API-оркестратора РБО
-  RAIFFEISEN_REFRESH_TOKEN — Refresh-токен, выпущенный в РБО (начальный)
-  RAIFFEISEN_ACCOUNT       — номер счёта (необязательно, если один счёт)
+  RAIFFEISEN_REFRESH_TOKEN — Refresh-токен, выпущенный в РБО
+  RAIFFEISEN_ACCOUNT       — номер счёта (опционально)
 """
 import os, json, logging, base64
 from datetime import datetime, timedelta
@@ -16,9 +16,8 @@ CLIENT_ID     = os.getenv("RAIFFEISEN_CLIENT_ID",     "")
 CLIENT_SECRET = os.getenv("RAIFFEISEN_CLIENT_SECRET",  "")
 ACCOUNT_NUM   = os.getenv("RAIFFEISEN_ACCOUNT",        "")
 
-SSO_URL       = "https://sso.rbo.raiffeisen.ru/token"
-API_BASE      = "https://orq.rbo.raiffeisen.ru"
-STATEMENT_URL = f"{API_BASE}/api/v1/accounts/{{account}}/transactions"
+SSO_URL  = "https://sso.rbo.raiffeisen.ru/token"
+API_BASE = "https://api.openapi.raiffeisen.ru"
 
 
 # ── хранилище токенов ─────────────────────────────────────────────────────────
@@ -48,15 +47,13 @@ def load_token() -> dict | None:
         return None
 
 
-# ── получение access_token через refresh_token ───────────────────────────────
+# ── обмен refresh_token на access_token ──────────────────────────────────────
 
 def _basic_auth() -> str:
-    creds = f"{CLIENT_ID}:{CLIENT_SECRET}"
-    return "Basic " + base64.b64encode(creds.encode()).decode()
+    return "Basic " + base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
 
 
 def refresh_tokens(refresh_token: str) -> dict:
-    """Обменивает refresh_token на новый access_token (и обновлённый refresh_token)."""
     import urllib.request, urllib.parse
     data = urllib.parse.urlencode({
         "client_id":     CLIENT_ID,
@@ -70,48 +67,46 @@ def refresh_tokens(refresh_token: str) -> dict:
     with urllib.request.urlopen(req, timeout=30) as r:
         token = json.loads(r.read())
     save_token(token)
-    log.info("Raiffeisen tokens обновлены")
+    log.info("Raiffeisen tokens обновлены, expires_in=%s", token.get("expires_in"))
     return token
 
 
-def get_valid_access_token() -> str:
-    """Возвращает актуальный access_token, обновляя при необходимости."""
+def get_valid_tokens() -> tuple[str, str]:
+    """Возвращает (access_token, id_token), обновляя при необходимости."""
     token = load_token()
-
-    # Если токена в БД нет — берём из переменной окружения (первый запуск)
     if not token:
         initial_rt = os.getenv("RAIFFEISEN_REFRESH_TOKEN", "")
         if not initial_rt:
             raise RuntimeError(
-                "Нет токена. Добавьте RAIFFEISEN_REFRESH_TOKEN в Railway Variables "
-                "(выпустите его в РБО → API-оркестратор → Выпустить Refresh-токен)"
+                "Нет токена. Добавьте RAIFFEISEN_REFRESH_TOKEN в Railway Variables."
             )
         token = refresh_tokens(initial_rt)
 
-    # Проверяем не истёк ли access_token
     saved_at   = datetime.fromisoformat(token.get("saved_at", "2000-01-01"))
     expires_in = int(token.get("expires_in", 3600))
     if datetime.now() >= saved_at + timedelta(seconds=expires_in - 300):
         token = refresh_tokens(token["refresh_token"])
 
-    return token["access_token"]
+    return token["access_token"], token.get("id_token", "")
 
 
-# ── получение выписки ─────────────────────────────────────────────────────────
+# ── получение счёта и выписки ─────────────────────────────────────────────────
 
-def _get_first_account(access_token: str) -> str | None:
+def _get_first_account(access_token: str, id_token: str) -> str | None:
     import urllib.request
     try:
-        req = urllib.request.Request(f"{API_BASE}/api/v1/accounts", headers={
+        url = f"{API_BASE}/api/v1/accounts?fields=Id,Number,Name,Currency"
+        req = urllib.request.Request(url, headers={
             "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json",
+            "ID-Token":      id_token,
+            "Accept":        "application/json",
         })
         with urllib.request.urlopen(req, timeout=15) as r:
             data = json.loads(r.read())
         accounts = data if isinstance(data, list) else data.get("accounts", [])
         if accounts:
             acc = accounts[0]
-            return acc.get("accountNumber") or acc.get("account") or acc.get("id")
+            return acc.get("Number") or acc.get("number") or acc.get("accountNumber")
     except Exception as e:
         log.error("Ошибка получения счетов: %s", e)
     return None
@@ -124,22 +119,23 @@ def fetch_statements(date_from: str = None, date_to: str = None) -> list[dict]:
     if not date_to:
         date_to = datetime.now().strftime("%Y-%m-%d")
 
-    access_token = get_valid_access_token()
-    account = ACCOUNT_NUM or _get_first_account(access_token)
+    access_token, id_token = get_valid_tokens()
+    account = ACCOUNT_NUM or _get_first_account(access_token, id_token)
     if not account:
         raise RuntimeError("Не удалось определить номер счёта")
 
-    url = (STATEMENT_URL.format(account=account)
-           + f"?startDate={date_from}&endDate={date_to}&showCurrency=RUR")
+    url = (f"{API_BASE}/api/v1/accounts/{account}/transactions"
+           f"?startDate={date_from}&endDate={date_to}&showCurrency=RUR")
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
+        "ID-Token":      id_token,
+        "Accept":        "application/json",
     })
     with urllib.request.urlopen(req, timeout=30) as r:
         data = json.loads(r.read())
 
     txs = data if isinstance(data, list) else data.get("transactions", data.get("items", []))
-    log.info("Raiffeisen API: получено %d транзакций за %s–%s", len(txs), date_from, date_to)
+    log.info("Raiffeisen API: %d транзакций за %s–%s", len(txs), date_from, date_to)
     return txs
 
 
