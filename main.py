@@ -527,32 +527,33 @@ async def raiffeisen_accounts(_: str = Depends(verify_admin)):
 
 @app.get("/api/raiffeisen/probe")
 async def raiffeisen_probe(_: str = Depends(verify_admin)):
-    """Пробуем разные пути к транзакциям чтобы найти правильный."""
+    """Пробуем разные форматы параметров для /statements."""
     import urllib.request, urllib.error
     from raiffeisen_api import get_valid_tokens, API_BASE, _get_account_id
-    import datetime as dt, json as _json
+    import datetime as dt
 
     access_token, id_token = get_valid_tokens()
     account_id = _get_account_id(access_token, id_token)
     today = dt.date.today().isoformat()
     week_ago = (dt.date.today() - dt.timedelta(days=7)).isoformat()
+    today_dt = dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    week_ago_dt = (dt.datetime.now() - dt.timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
 
-    candidates = [
-        f"{API_BASE}/api/v1/accounts/{account_id}/transactions?startDate={week_ago}&endDate={today}",
-        f"{API_BASE}/api/v1/accounts/{account_id}/statements?startDate={week_ago}&endDate={today}",
-        f"{API_BASE}/api/v1/transactions?accountId={account_id}&startDate={week_ago}&endDate={today}",
-        f"{API_BASE}/api/v1/statements?accountId={account_id}&startDate={week_ago}&endDate={today}",
-        f"{API_BASE}/api/v1/accounts/{account_id}/operations?startDate={week_ago}&endDate={today}",
-        f"{API_BASE}/api/v2/accounts/{account_id}/transactions?startDate={week_ago}&endDate={today}",
-        f"{API_BASE}/api/v1/accounts/{account_id}/transactions?from={week_ago}&to={today}",
-        f"{API_BASE}/api/v1/accounts/{account_id}/transactions?dateFrom={week_ago}&dateTo={today}",
-    ]
+    base = f"{API_BASE}/api/v1/accounts/{account_id}/statements"
+    candidates = {
+        "no_params":              base,
+        "startDate_endDate":      f"{base}?startDate={week_ago}&endDate={today}",
+        "from_to":                f"{base}?from={week_ago}&to={today}",
+        "dateFrom_dateTo":        f"{base}?dateFrom={week_ago}&dateTo={today}",
+        "startDate_endDate_dt":   f"{base}?startDate={week_ago_dt}&endDate={today_dt}",
+        "statementDate_today":    f"{base}?statementDate={today}",
+        "statementDate_week_ago": f"{base}?statementDate={week_ago}",
+        "page_size":              f"{base}?startDate={week_ago}&endDate={today}&page=0&size=10",
+        "accountId_param":        f"{API_BASE}/api/v1/statements?accountId={account_id}&startDate={week_ago}&endDate={today}",
+    }
 
     results = {}
-    for url in candidates:
-        path = url.replace(API_BASE, "").split("?")[0]
-        params = url.split("?")[1] if "?" in url else ""
-        key = f"{path}?{params[:30]}"
+    for label, url in candidates.items():
         try:
             req = urllib.request.Request(url, headers={
                 "Authorization": f"Bearer {access_token}",
@@ -560,16 +561,16 @@ async def raiffeisen_probe(_: str = Depends(verify_admin)):
                 "Accept": "application/json",
             })
             with urllib.request.urlopen(req, timeout=10) as r:
-                body = r.read(300).decode()
-                results[key] = {"code": r.status, "preview": body}
+                body = r.read(500).decode()
+                results[label] = {"code": r.status, "preview": body[:200]}
         except urllib.error.HTTPError as e:
             try:
                 body = e.read().decode()[:300]
             except Exception:
                 body = ""
-            results[key] = {"code": e.code, "reason": e.reason, "body": body}
+            results[label] = {"code": e.code, "reason": e.reason, "body": body}
         except Exception as ex:
-            results[key] = {"error": str(ex)[:100]}
+            results[label] = {"error": str(ex)[:100]}
 
     return {"account_id": account_id, "results": results}
 
