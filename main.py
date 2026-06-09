@@ -563,7 +563,11 @@ async def raiffeisen_probe(_: str = Depends(verify_admin)):
                 body = r.read(300).decode()
                 results[key] = {"code": r.status, "preview": body}
         except urllib.error.HTTPError as e:
-            results[key] = {"code": e.code, "reason": e.reason}
+            try:
+                body = e.read().decode()[:300]
+            except Exception:
+                body = ""
+            results[key] = {"code": e.code, "reason": e.reason, "body": body}
         except Exception as ex:
             results[key] = {"error": str(ex)[:100]}
 
