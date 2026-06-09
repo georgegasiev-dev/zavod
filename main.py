@@ -42,6 +42,29 @@ async def scheduled_tg_report():
     except Exception as e:
         log.error("Ошибка отправки отчёта: %s", e)
 
+async def _register_tg_webhook():
+    """Регистрирует webhook в Telegram при старте."""
+    import httpx
+    tg_token = os.getenv("TG_TOKEN", "")
+    base_url = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+    if not tg_token or not base_url:
+        log.info("TG_TOKEN или RAILWAY_PUBLIC_DOMAIN не заданы — webhook не зарегистрирован")
+        return
+    webhook_url = f"https://{base_url}/webhook/telegram"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                f"https://api.telegram.org/bot{tg_token}/setWebhook",
+                json={"url": webhook_url, "allowed_updates": ["message"]}
+            )
+            data = r.json()
+            if data.get("ok"):
+                log.info("Telegram webhook зарегистрирован: %s", webhook_url)
+            else:
+                log.warning("Webhook не зарегистрирован: %s", data)
+    except Exception as e:
+        log.error("Ошибка регистрации webhook: %s", e)
+
 # Время синхронизации: каждый день в 10:00 по Москве
 # Настраивается через переменную SYNC_HOUR (по умолчанию 10)
 SYNC_HOUR   = int(os.getenv("SYNC_HOUR",   "10"))
@@ -59,6 +82,7 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     log.info("Scheduler started. Gmail sync %02d:%02d, TG report %02d:%02d МСК.",
              SYNC_HOUR, SYNC_MINUTE, REPORT_HOUR, REPORT_MINUTE)
+    await _register_tg_webhook()
     yield
     scheduler.shutdown()
 
@@ -109,6 +133,93 @@ async def manual_report(_: str = Depends(verify_admin)):
         return {"status": "ok", **result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/webhook/telegram")
+async def tg_webhook(request: Request):
+    """Обрабатывает входящие сообщения от Telegram."""
+    import httpx
+    tg_token = os.getenv("TG_TOKEN", "")
+    tg_chat  = os.getenv("TG_CHAT_ID", "")
+
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": True}
+
+    msg     = body.get("message", {})
+    chat_id = str(msg.get("chat", {}).get("id", ""))
+    text    = (msg.get("text") or "").strip()
+
+    # Отвечаем только владельцу
+    if chat_id != tg_chat:
+        return {"ok": True}
+
+    async def reply(txt: str):
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{tg_token}/sendMessage",
+                    json={"chat_id": chat_id, "text": txt, "parse_mode": "HTML"}
+                )
+        except Exception as e:
+            log.error("Ошибка ответа в Telegram: %s", e)
+
+    cmd = text.lower().split()[0] if text else ""
+
+    if cmd in ("/report", "отчёт", "отчет", "report"):
+        await reply("⏳ Формирую отчёт...")
+        try:
+            from telegram_reporter import build_weekly_report
+            report_text = build_weekly_report()
+            await reply(report_text)
+        except Exception as e:
+            await reply(f"❌ Ошибка: {e}")
+
+    elif cmd in ("/sync", "sync", "обновить"):
+        await reply("⏳ Запрашиваю выписку из Gmail...")
+        try:
+            from gmail_fetcher import fetch_and_upload
+            result = fetch_and_upload()
+            processed = result.get("processed", 0)
+            if processed > 0:
+                await reply(f"✅ Загружено выписок: {processed}")
+            else:
+                await reply("📭 Новых выписок в почте нет")
+        except Exception as e:
+            await reply(f"❌ Ошибка: {e}")
+
+    elif cmd in ("/status", "status", "статус"):
+        try:
+            from database import get_all_months
+            all_data = get_all_months()
+            lines = ["📊 <b>Статус базы данных</b>\n"]
+            for month, data in sorted(all_data.items()):
+                ops = data.get("total_ops", 0)
+                inc = sum(data.get("weeks_in", []))
+                exp = sum(data.get("weeks_out", []))
+                upd = (data.get("updated_at") or "")[:10]
+                lines.append(f"· <b>{month}</b> — {ops} оп. | ↑{inc/1e6:.1f}M ↓{exp/1e6:.1f}M | {upd}")
+            await reply("\n".join(lines))
+        except Exception as e:
+            await reply(f"❌ Ошибка: {e}")
+
+    elif cmd in ("/start", "/help", "help", "помощь"):
+        await reply(
+            "👋 <b>Новатор · Отчётный бот</b>\n\n"
+            "Доступные команды:\n\n"
+            "/report — отчёт за текущую неделю\n"
+            "/sync — загрузить свежую выписку из Gmail\n"
+            "/status — состояние базы данных\n"
+            "/help — эта справка\n\n"
+            "Автоотчёт приходит каждый день в 10:30 МСК 🕥"
+        )
+    else:
+        await reply(
+            "Не понял команду. Напиши /help чтобы увидеть что умею."
+        )
+
+    return {"ok": True}
 
 async def manual_sync(_: str = Depends(verify_admin)):
     """Ручной запуск синхронизации Gmail — без ожидания расписания."""
