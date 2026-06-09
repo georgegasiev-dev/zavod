@@ -92,7 +92,8 @@ def get_valid_tokens() -> tuple[str, str]:
 
 # ── получение счёта и выписки ─────────────────────────────────────────────────
 
-def _get_first_account(access_token: str, id_token: str) -> str | None:
+def _get_account_id(access_token: str, id_token: str) -> str | None:
+    """Возвращает UUID счёта для API. Если задан ACCOUNT_NUM — ищет по номеру, иначе берёт первый рублёвый."""
     import urllib.request
     try:
         url = f"{API_BASE}/api/v1/accounts?fields=Id,Number,Name,Currency"
@@ -102,11 +103,22 @@ def _get_first_account(access_token: str, id_token: str) -> str | None:
             "Accept":        "application/json",
         })
         with urllib.request.urlopen(req, timeout=15) as r:
-            data = json.loads(r.read())
-        accounts = data if isinstance(data, list) else data.get("accounts", [])
+            accounts = json.loads(r.read())
+        if not isinstance(accounts, list):
+            accounts = accounts.get("accounts", [])
+
+        if ACCOUNT_NUM:
+            # Ищем по номеру счёта
+            for acc in accounts:
+                if acc.get("number") == ACCOUNT_NUM or acc.get("Number") == ACCOUNT_NUM:
+                    return acc.get("id") or acc.get("Id")
+        # Берём первый рублёвый счёт
+        for acc in accounts:
+            if (acc.get("currency") or acc.get("Currency") or "").upper() == "RUR":
+                return acc.get("id") or acc.get("Id")
+        # Фоллбэк — первый счёт
         if accounts:
-            acc = accounts[0]
-            return acc.get("Number") or acc.get("number") or acc.get("accountNumber")
+            return accounts[0].get("id") or accounts[0].get("Id")
     except Exception as e:
         log.error("Ошибка получения счетов: %s", e)
     return None
@@ -120,11 +132,11 @@ def fetch_statements(date_from: str = None, date_to: str = None) -> list[dict]:
         date_to = datetime.now().strftime("%Y-%m-%d")
 
     access_token, id_token = get_valid_tokens()
-    account = ACCOUNT_NUM or _get_first_account(access_token, id_token)
-    if not account:
-        raise RuntimeError("Не удалось определить номер счёта")
+    account_id = _get_account_id(access_token, id_token)
+    if not account_id:
+        raise RuntimeError("Не удалось определить UUID счёта")
 
-    url = (f"{API_BASE}/api/v1/accounts/{account}/transactions"
+    url = (f"{API_BASE}/api/v1/accounts/{account_id}/transactions"
            f"?startDate={date_from}&endDate={date_to}&showCurrency=RUR")
     req = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {access_token}",
