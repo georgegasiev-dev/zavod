@@ -477,6 +477,7 @@ MCP_TOOLS = [
                          "month": {"type": "string", "description": "Май | Июнь | …"},
                          "week":  {"type": "integer", "description": "Номер недели 1–5 (необязательно, если не указан — весь месяц)"}},
                      "required": ["month"]}},
+    {"name": "get_unknown_payments",
      "description": "Список нераспознанных платежей за месяц.",
      "inputSchema": {"type": "object",
                      "properties": {"month": {"type": "string"}},
