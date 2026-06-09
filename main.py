@@ -32,21 +32,33 @@ async def scheduled_gmail_sync():
     except Exception as e:
         log.error("Ошибка плановой синхронизации: %s", e)
 
+async def scheduled_tg_report():
+    """Отправляет еженедельный отчёт в Telegram."""
+    log.info("📨 Отправка отчёта в Telegram...")
+    try:
+        from telegram_reporter import send_weekly_report
+        result = send_weekly_report()
+        log.info("Telegram report: %s", result)
+    except Exception as e:
+        log.error("Ошибка отправки отчёта: %s", e)
+
 # Время синхронизации: каждый день в 10:00 по Москве
 # Настраивается через переменную SYNC_HOUR (по умолчанию 10)
-SYNC_HOUR = int(os.getenv("SYNC_HOUR", "10"))
+SYNC_HOUR   = int(os.getenv("SYNC_HOUR",   "10"))
 SYNC_MINUTE = int(os.getenv("SYNC_MINUTE", "0"))
+# Время отчёта в Telegram (по умолчанию 10:30 МСК)
+REPORT_HOUR   = int(os.getenv("REPORT_HOUR",   "10"))
+REPORT_MINUTE = int(os.getenv("REPORT_MINUTE", "30"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduler.add_job(
-        scheduled_gmail_sync,
-        CronTrigger(hour=SYNC_HOUR, minute=SYNC_MINUTE),
-        id="gmail_sync",
-        replace_existing=True,
-    )
+    scheduler.add_job(scheduled_gmail_sync, CronTrigger(hour=SYNC_HOUR, minute=SYNC_MINUTE),
+                      id="gmail_sync", replace_existing=True)
+    scheduler.add_job(scheduled_tg_report, CronTrigger(hour=REPORT_HOUR, minute=REPORT_MINUTE),
+                      id="tg_report", replace_existing=True)
     scheduler.start()
-    log.info("Scheduler started. Gmail sync at %02d:%02d Moscow time.", SYNC_HOUR, SYNC_MINUTE)
+    log.info("Scheduler started. Gmail sync %02d:%02d, TG report %02d:%02d МСК.",
+             SYNC_HOUR, SYNC_MINUTE, REPORT_HOUR, REPORT_MINUTE)
     yield
     scheduler.shutdown()
 
@@ -88,7 +100,16 @@ def get_status():
 def health():
     return {"status": "ok", "time": datetime.now().isoformat()}
 
-@app.post("/api/sync")
+@app.post("/api/report")
+async def manual_report(_: str = Depends(verify_admin)):
+    """Ручная отправка отчёта в Telegram — для теста."""
+    try:
+        from telegram_reporter import send_weekly_report
+        result = send_weekly_report()
+        return {"status": "ok", **result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 async def manual_sync(_: str = Depends(verify_admin)):
     """Ручной запуск синхронизации Gmail — без ожидания расписания."""
     try:
