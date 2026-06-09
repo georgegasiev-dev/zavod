@@ -524,7 +524,52 @@ async def raiffeisen_accounts(_: str = Depends(verify_admin)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def raiffeisen_status(_: str = Depends(verify_admin)):
+
+@app.get("/api/raiffeisen/probe")
+async def raiffeisen_probe(_: str = Depends(verify_admin)):
+    """Пробуем разные пути к транзакциям чтобы найти правильный."""
+    import urllib.request, urllib.error
+    from raiffeisen_api import get_valid_tokens, API_BASE, _get_account_id
+    import datetime as dt, json as _json
+
+    access_token, id_token = get_valid_tokens()
+    account_id = _get_account_id(access_token, id_token)
+    today = dt.date.today().isoformat()
+    week_ago = (dt.date.today() - dt.timedelta(days=7)).isoformat()
+
+    candidates = [
+        f"{API_BASE}/api/v1/accounts/{account_id}/transactions?startDate={week_ago}&endDate={today}",
+        f"{API_BASE}/api/v1/accounts/{account_id}/statements?startDate={week_ago}&endDate={today}",
+        f"{API_BASE}/api/v1/transactions?accountId={account_id}&startDate={week_ago}&endDate={today}",
+        f"{API_BASE}/api/v1/statements?accountId={account_id}&startDate={week_ago}&endDate={today}",
+        f"{API_BASE}/api/v1/accounts/{account_id}/operations?startDate={week_ago}&endDate={today}",
+        f"{API_BASE}/api/v2/accounts/{account_id}/transactions?startDate={week_ago}&endDate={today}",
+        f"{API_BASE}/api/v1/accounts/{account_id}/transactions?from={week_ago}&to={today}",
+        f"{API_BASE}/api/v1/accounts/{account_id}/transactions?dateFrom={week_ago}&dateTo={today}",
+    ]
+
+    results = {}
+    for url in candidates:
+        path = url.replace(API_BASE, "").split("?")[0]
+        params = url.split("?")[1] if "?" in url else ""
+        key = f"{path}?{params[:30]}"
+        try:
+            req = urllib.request.Request(url, headers={
+                "Authorization": f"Bearer {access_token}",
+                "ID-Token": id_token,
+                "Accept": "application/json",
+            })
+            with urllib.request.urlopen(req, timeout=10) as r:
+                body = r.read(300).decode()
+                results[key] = {"code": r.status, "preview": body}
+        except urllib.error.HTTPError as e:
+            results[key] = {"code": e.code, "reason": e.reason}
+        except Exception as ex:
+            results[key] = {"error": str(ex)[:100]}
+
+    return {"account_id": account_id, "results": results}
+
+
     """Статус авторизации Raiffeisen API."""
     from raiffeisen_api import load_token, get_auth_url, CLIENT_ID
     if not CLIENT_ID:
