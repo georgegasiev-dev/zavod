@@ -1,13 +1,14 @@
 """
-Raiffeisen Business API — выписки через Refresh-токен из РБО.
+Raiffeisen Business API — генерация и скачивание выписок в формате Excel.
 
 Переменные окружения (Railway → Variables):
   RAIFFEISEN_CLIENT_ID     — Client ID из API-оркестратора РБО
   RAIFFEISEN_CLIENT_SECRET — Client Secret из API-оркестратора РБО
   RAIFFEISEN_REFRESH_TOKEN — Refresh-токен, выпущенный в РБО
   RAIFFEISEN_ACCOUNT       — номер счёта (опционально)
+  RAIFFEISEN_CNUM          — CNUM клиента (опционально, ищем автоматически)
 """
-import os, json, logging, base64
+import os, json, logging, base64, time
 from datetime import datetime, timedelta
 
 log = logging.getLogger("raiffeisen_api")
@@ -15,9 +16,12 @@ log = logging.getLogger("raiffeisen_api")
 CLIENT_ID     = os.getenv("RAIFFEISEN_CLIENT_ID",     "")
 CLIENT_SECRET = os.getenv("RAIFFEISEN_CLIENT_SECRET",  "")
 ACCOUNT_NUM   = os.getenv("RAIFFEISEN_ACCOUNT",        "")
+CNUM          = os.getenv("RAIFFEISEN_CNUM",           "")
 
-SSO_URL  = "https://sso.rbo.raiffeisen.ru/token"
-API_BASE = "https://api.openapi.raiffeisen.ru"
+# Правильные URL из документации
+SSO_URL          = "https://sso.rbo.raiffeisen.ru/token"
+ACCOUNTS_API     = "https://api.openapi.raiffeisen.ru"
+STATEMENTS_API   = "https://api.raiffeisen.ru/bank-statements"
 
 
 # ── хранилище токенов ─────────────────────────────────────────────────────────
@@ -47,8 +51,6 @@ def load_token() -> dict | None:
         return None
 
 
-# ── обмен refresh_token на access_token ──────────────────────────────────────
-
 def _basic_auth() -> str:
     return "Basic " + base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
 
@@ -67,122 +69,179 @@ def refresh_tokens(refresh_token: str) -> dict:
     with urllib.request.urlopen(req, timeout=30) as r:
         token = json.loads(r.read())
     save_token(token)
-    log.info("Raiffeisen tokens обновлены, expires_in=%s", token.get("expires_in"))
+    log.info("Raiffeisen tokens обновлены")
     return token
 
 
 def get_valid_tokens() -> tuple[str, str]:
-    """Возвращает (access_token, id_token), обновляя при необходимости."""
     token = load_token()
     if not token:
         initial_rt = os.getenv("RAIFFEISEN_REFRESH_TOKEN", "")
         if not initial_rt:
-            raise RuntimeError(
-                "Нет токена. Добавьте RAIFFEISEN_REFRESH_TOKEN в Railway Variables."
-            )
+            raise RuntimeError("Нет токена. Добавьте RAIFFEISEN_REFRESH_TOKEN в Railway Variables.")
         token = refresh_tokens(initial_rt)
-
     saved_at   = datetime.fromisoformat(token.get("saved_at", "2000-01-01"))
     expires_in = int(token.get("expires_in", 3600))
     if datetime.now() >= saved_at + timedelta(seconds=expires_in - 300):
         token = refresh_tokens(token["refresh_token"])
-
     return token["access_token"], token.get("id_token", "")
 
 
-# ── получение счёта и выписки ─────────────────────────────────────────────────
+# ── Получение данных счёта ────────────────────────────────────────────────────
 
-def _get_account_id(access_token: str, id_token: str) -> str | None:
-    """Возвращает UUID счёта для API. Если задан ACCOUNT_NUM — ищет по номеру, иначе берёт первый рублёвый."""
+def _get_accounts(access_token: str, id_token: str) -> list[dict]:
     import urllib.request
-    try:
-        url = f"{API_BASE}/api/v1/accounts?fields=Id,Number,Name,Currency"
-        req = urllib.request.Request(url, headers={
+    req = urllib.request.Request(
+        f"{ACCOUNTS_API}/api/v1/accounts?fields=Id,Number,Name,Currency,Cnum,ClientNumber",
+        headers={
             "Authorization": f"Bearer {access_token}",
-            "ID-Token":      id_token,
-            "Accept":        "application/json",
-        })
-        with urllib.request.urlopen(req, timeout=15) as r:
-            accounts = json.loads(r.read())
-        if not isinstance(accounts, list):
-            accounts = accounts.get("accounts", [])
-
-        if ACCOUNT_NUM:
-            # Ищем по номеру счёта
-            for acc in accounts:
-                if acc.get("number") == ACCOUNT_NUM or acc.get("Number") == ACCOUNT_NUM:
-                    return acc.get("id") or acc.get("Id")
-        # Берём первый рублёвый счёт
-        for acc in accounts:
-            if (acc.get("currency") or acc.get("Currency") or "").upper() == "RUR":
-                return acc.get("id") or acc.get("Id")
-        # Фоллбэк — первый счёт
-        if accounts:
-            return accounts[0].get("id") or accounts[0].get("Id")
-    except Exception as e:
-        log.error("Ошибка получения счетов: %s", e)
-    return None
+            "ID-Token": id_token,
+            "Accept": "application/json",
+        }
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        data = json.loads(r.read())
+    return data if isinstance(data, list) else data.get("accounts", [])
 
 
-def fetch_statements(date_from: str = None, date_to: str = None) -> list[dict]:
+def _get_account_key(access_token: str, id_token: str) -> str:
+    """Возвращает accountKey в формате 'номерсчёта:CNUM'."""
+    # Если заданы обе переменные — используем напрямую
+    if ACCOUNT_NUM and CNUM:
+        return f"{ACCOUNT_NUM}:{CNUM}"
+
+    accounts = _get_accounts(access_token, id_token)
+    # Ищем рублёвый расчётный счёт
+    target = None
+    for acc in accounts:
+        currency = (acc.get("currency") or acc.get("Currency") or "").upper()
+        if currency == "RUR":
+            target = acc
+            break
+    if not target and accounts:
+        target = accounts[0]
+    if not target:
+        raise RuntimeError("Не найден ни один счёт")
+
+    number = target.get("number") or target.get("Number") or ACCOUNT_NUM
+    cnum   = (target.get("cnum") or target.get("Cnum") or
+              target.get("clientNumber") or target.get("ClientNumber") or CNUM)
+
+    if not cnum:
+        raise RuntimeError(
+            f"Не найден CNUM для счёта {number}. "
+            "Добавьте RAIFFEISEN_CNUM в Railway Variables. "
+            "Найти в РБО: профиль → информация о компании → номер клиента."
+        )
+    return f"{number}:{cnum}"
+
+
+# ── Генерация и скачивание выписки ───────────────────────────────────────────
+
+def _auth_headers(access_token: str, id_token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {access_token}",
+        "Id-Token":      id_token,
+        "Content-Type":  "application/json",
+        "Accept":        "application/json",
+    }
+
+
+def _post(url: str, body: dict, headers: dict) -> dict:
     import urllib.request
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data, headers=headers)
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read() or b"{}")
+
+
+def _get(url: str, headers: dict) -> bytes:
+    import urllib.request
+    req = urllib.request.Request(url, headers={k: v for k, v in headers.items()
+                                                if k != "Content-Type"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read()
+
+
+def generate_excel_report(account_key: str, date_from: str, date_to: str,
+                           access_token: str, id_token: str) -> str:
+    """Запрашивает генерацию Excel-выписки, возвращает reportId."""
+    body = {
+        "accountKeys": [account_key],
+        "from": date_from,
+        "to":   date_to,
+    }
+    headers = _auth_headers(access_token, id_token)
+    resp = _post(f"{STATEMENTS_API}/v1/reports/excel", body, headers)
+    report_id = resp.get("reportId")
+    if not report_id:
+        raise RuntimeError(f"Не получен reportId: {resp}")
+    log.info("Raiffeisen: reportId=%s", report_id)
+    return report_id
+
+
+def wait_for_report(report_id: str, access_token: str, id_token: str,
+                    max_wait: int = 120) -> str:
+    """Ждёт готовности отчёта, возвращает финальный статус."""
+    import urllib.request
+    headers = {k: v for k, v in _auth_headers(access_token, id_token).items()
+               if k not in ("Content-Type",)}
+    url = f"{STATEMENTS_API}/v1/reports/{report_id}/status"
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read())
+        status = data.get("status", "UNKNOWN")
+        log.info("Raiffeisen report status: %s", status)
+        if status == "COMPLETED":
+            return status
+        if status in ("FAILED", "STOPPED", "CANCELLED"):
+            raise RuntimeError(f"Генерация отчёта завершилась: {status}")
+        time.sleep(5)
+    raise RuntimeError(f"Таймаут ожидания отчёта {report_id}")
+
+
+def download_report(report_id: str, access_token: str, id_token: str) -> bytes:
+    """Скачивает файл отчёта, возвращает байты Excel."""
+    headers = {k: v for k, v in _auth_headers(access_token, id_token).items()
+               if k not in ("Content-Type",)}
+    return _get(f"{STATEMENTS_API}/v1/reports/{report_id}/file", headers)
+
+
+# ── Основная точка входа ──────────────────────────────────────────────────────
+
+def fetch_statements(date_from: str = None, date_to: str = None) -> bytes:
+    """Запрашивает, ждёт и скачивает Excel-выписку. Возвращает байты файла."""
     if not date_from:
         date_from = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     if not date_to:
-        date_to = datetime.now().strftime("%Y-%m-%d")
+        # MT940 требует to != текущая дата; берём вчера
+        date_to = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     access_token, id_token = get_valid_tokens()
-    account_id = _get_account_id(access_token, id_token)
-    if not account_id:
-        raise RuntimeError("Не удалось определить UUID счёта")
+    account_key = _get_account_key(access_token, id_token)
+    log.info("Raiffeisen: account_key=%s, %s → %s", account_key, date_from, date_to)
 
-    url = (f"{API_BASE}/api/v1/accounts/{account_id}/transactions"
-           f"?startDate={date_from}&endDate={date_to}&showCurrency=RUR")
-    req = urllib.request.Request(url, headers={
-        "Authorization": f"Bearer {access_token}",
-        "ID-Token":      id_token,
-        "Accept":        "application/json",
-    })
-    with urllib.request.urlopen(req, timeout=30) as r:
-        data = json.loads(r.read())
-
-    txs = data if isinstance(data, list) else data.get("transactions", data.get("items", []))
-    log.info("Raiffeisen API: %d транзакций за %s–%s", len(txs), date_from, date_to)
-    return txs
-
-
-def transactions_to_df(transactions: list[dict]):
-    import pandas as pd
-    rows = []
-    for tx in transactions:
-        date_str = (tx.get("operationDate") or tx.get("date") or tx.get("valueDate") or "")[:10]
-        amount   = float(tx.get("amount") or tx.get("sum") or 0)
-        tx_type  = (tx.get("direction") or tx.get("transactionType") or "").lower()
-        is_debit = tx_type in ("debit", "д", "out") if tx_type else amount < 0
-        rows.append({
-            "Дата операции":     date_str,
-            "Тип операций":      "Дебет" if is_debit else "Кредит",
-            "Контрагент":        tx.get("counterparty") or tx.get("payerName") or tx.get("recipientName") or "",
-            "Назначение платежа": tx.get("paymentPurpose") or tx.get("purpose") or tx.get("description") or "",
-            "Дебет":             abs(amount) if is_debit else 0,
-            "Кредит":            abs(amount) if not is_debit else 0,
-        })
-    return pd.DataFrame(rows) if rows else pd.DataFrame()
+    report_id = generate_excel_report(account_key, date_from, date_to, access_token, id_token)
+    wait_for_report(report_id, access_token, id_token)
+    return download_report(report_id, access_token, id_token)
 
 
 def fetch_and_load(date_from: str = None, date_to: str = None) -> dict:
+    """Получает выписку и сохраняет в БД."""
+    import io
+    import pandas as pd
     from classifier import classify_operations, month_for_date
     from database import merge_month_data
 
-    txs = fetch_statements(date_from, date_to)
-    if not txs:
-        return {"processed": 0, "months": []}
+    xlsx_bytes = fetch_statements(date_from, date_to)
+    df = pd.read_excel(io.BytesIO(xlsx_bytes))
 
-    df = transactions_to_df(txs)
     if df.empty:
         return {"processed": 0, "months": []}
 
-    df["_target_month"] = df["Дата операции"].apply(lambda x: month_for_date(x, "Июнь"))
+    df["_target_month"] = df.iloc[:, 0].apply(lambda x: month_for_date(x, "Июнь"))
     total_ops, months_updated = 0, []
     for m, sub_df in df.groupby("_target_month"):
         sub_df = sub_df.drop(columns=["_target_month"])
@@ -192,4 +251,4 @@ def fetch_and_load(date_from: str = None, date_to: str = None) -> dict:
         total_ops += result.get("total_ops", 0)
         months_updated.append(m)
 
-    return {"processed": len(txs), "ops_saved": total_ops, "months": months_updated}
+    return {"processed": len(df), "ops_saved": total_ops, "months": months_updated}
