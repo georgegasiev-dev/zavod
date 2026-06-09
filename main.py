@@ -502,7 +502,28 @@ async def raiffeisen_sync(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/raiffeisen/status")
+@app.get("/api/raiffeisen/accounts")
+async def raiffeisen_accounts(_: str = Depends(verify_admin)):
+    """Отладка: список счетов из Raiffeisen API."""
+    import urllib.request, urllib.error
+    try:
+        from raiffeisen_api import get_valid_tokens, API_BASE
+        access_token, id_token = get_valid_tokens()
+        url = f"{API_BASE}/api/v1/accounts?fields=Id,Number,Name,Currency"
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {access_token}",
+            "ID-Token":      id_token,
+            "Accept":        "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=15) as r:
+            import json
+            data = json.loads(r.read())
+        return {"status": "ok", "data": data}
+    except urllib.error.HTTPError as e:
+        return {"status": "error", "code": e.code, "reason": e.reason, "body": e.read().decode()[:500]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 def raiffeisen_status(_: str = Depends(verify_admin)):
     """Статус авторизации Raiffeisen API."""
     from raiffeisen_api import load_token, get_auth_url, CLIENT_ID
