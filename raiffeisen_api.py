@@ -216,9 +216,9 @@ def wait_for_report(report_id: str, access_token: str, id_token: str,
                 data = resp.json()
                 last_status = data.get("status", "UNKNOWN")
                 log.info("Raiffeisen report status: %s", last_status)
-                if last_status == "COMPLETED":
+                if last_status.upper() == "COMPLETED":
                     return last_status
-                if last_status in ("FAILED", "STOPPED", "CANCELLED"):
+                if last_status.upper() in ("FAILED", "STOPPED", "CANCELLED"):
                     raise RuntimeError(
                         f"Генерация отчёта завершилась со статусом {last_status}: {last_body}"
                     )
