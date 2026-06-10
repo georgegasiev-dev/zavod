@@ -379,4 +379,42 @@ def fetch_and_load(date_from: str = None, date_to: str = None) -> dict:
         total_ops += result.get("total_ops", 0)
         months_updated.append(m)
 
-    return {"processed": len(df), "ops_saved": total_ops, "months": months_updated}
+    # ── Сверка итогов с банковскими данными ──────────────────────────────
+    def _parse_balance(raw_val) -> float:
+        """Парсит строку вида '163 582.93 (Кр/Cr)' → 163582.93"""
+        try:
+            s = str(raw_val).split('(')[0]          # убираем (Кр/Cr)
+            s = s.replace(' ', '').replace(' ', '').replace(',', '.')
+            return abs(float(s))
+        except Exception:
+            return 0.0
+
+    recon = {}
+    try:
+        opening = _parse_balance(raw.iloc[7, 1])     # строка 7, кол 1
+        closing = _parse_balance(raw.iloc[-1, 1])     # последняя строка, кол 1
+        total_debit  = float(df["Дебет"].sum())
+        total_credit = float(df["Кредит"].sum())
+        expected_closing = round(opening + total_credit - total_debit, 2)
+        diff = round(closing - expected_closing, 2)
+        recon = {
+            "opening_balance":   round(opening, 2),
+            "closing_balance":   round(closing, 2),
+            "total_debit":       round(total_debit, 2),
+            "total_credit":      round(total_credit, 2),
+            "expected_closing":  expected_closing,
+            "discrepancy":       diff,
+            "ok":                abs(diff) < 1.0,
+        }
+        if not recon["ok"]:
+            log.warning("⚠️ Сверка не сошлась! Расхождение: %.2f ₽ (ожидалось %.2f, в банке %.2f)",
+                        diff, expected_closing, closing)
+        else:
+            log.info("✅ Сверка OK: входящий %.2f + кредит %.2f − дебет %.2f = %.2f (банк: %.2f)",
+                     opening, total_credit, total_debit, expected_closing, closing)
+    except Exception as e:
+        log.warning("Сверка не выполнена: %s", e)
+        recon = {"ok": None, "error": str(e)[:100]}
+
+    return {"processed": len(df), "ops_saved": total_ops, "months": months_updated,
+            "reconciliation": recon}
