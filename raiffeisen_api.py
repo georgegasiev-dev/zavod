@@ -150,19 +150,21 @@ def _auth_headers(access_token: str, id_token: str) -> dict:
 
 
 def _post(url: str, body: dict, headers: dict) -> dict:
-    import urllib.request
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, headers=headers)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read() or b"{}")
+    import httpx
+    h = {k: v for k, v in headers.items() if k != "Content-Type"}
+    with httpx.Client(timeout=30) as client:
+        resp = client.post(url, json=body, headers=h)
+        resp.raise_for_status()
+        return resp.json() if resp.content else {}
 
 
 def _get(url: str, headers: dict) -> bytes:
-    import urllib.request
-    req = urllib.request.Request(url, headers={k: v for k, v in headers.items()
-                                                if k != "Content-Type"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read()
+    import httpx
+    h = {k: v for k, v in headers.items() if k != "Content-Type"}
+    with httpx.Client(timeout=30) as client:
+        resp = client.get(url, headers=h)
+        resp.raise_for_status()
+        return resp.content
 
 
 def generate_excel_report(account_key: str, date_from: str, date_to: str,
@@ -185,22 +187,23 @@ def generate_excel_report(account_key: str, date_from: str, date_to: str,
 def wait_for_report(report_id: str, access_token: str, id_token: str,
                     max_wait: int = 120) -> str:
     """Ждёт готовности отчёта, возвращает финальный статус."""
-    import urllib.request
+    import httpx
     headers = {k: v for k, v in _auth_headers(access_token, id_token).items()
-               if k not in ("Content-Type",)}
+               if k != "Content-Type"}
     url = f"{STATEMENTS_API}/v1/reports/{report_id}/status"
     deadline = time.time() + max_wait
-    while time.time() < deadline:
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=15) as r:
-            data = json.loads(r.read())
-        status = data.get("status", "UNKNOWN")
-        log.info("Raiffeisen report status: %s", status)
-        if status == "COMPLETED":
-            return status
-        if status in ("FAILED", "STOPPED", "CANCELLED"):
-            raise RuntimeError(f"Генерация отчёта завершилась: {status}")
-        time.sleep(5)
+    with httpx.Client(timeout=15) as client:
+        while time.time() < deadline:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            status = data.get("status", "UNKNOWN")
+            log.info("Raiffeisen report status: %s", status)
+            if status == "COMPLETED":
+                return status
+            if status in ("FAILED", "STOPPED", "CANCELLED"):
+                raise RuntimeError(f"Генерация отчёта завершилась: {status}")
+            time.sleep(5)
     raise RuntimeError(f"Таймаут ожидания отчёта {report_id}")
 
 
