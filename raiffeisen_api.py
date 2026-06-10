@@ -412,6 +412,13 @@ def fetch_and_load(date_from: str = None, date_to: str = None) -> dict:
         else:
             log.info("✅ Сверка OK: входящий %.2f + кредит %.2f − дебет %.2f = %.2f (банк: %.2f)",
                      opening, total_credit, total_debit, expected_closing, closing)
+        # Сохраняем баланс счёта в БД для отображения на фронте
+        try:
+            from database import save_setting
+            save_setting("account_balance", str(closing))
+            save_setting("balance_updated_at", datetime.now().isoformat())
+        except Exception as se:
+            log.warning("Не удалось сохранить баланс: %s", se)
     except Exception as e:
         log.warning("Сверка не выполнена: %s", e)
         recon = {"ok": None, "error": str(e)[:100]}
