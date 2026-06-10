@@ -315,16 +315,47 @@ def fetch_and_load(date_from: str = None, date_to: str = None) -> dict:
     # Отправляем файл в Telegram для проверки
     _send_excel_to_telegram(xlsx_bytes, d_from, d_to)
 
-    df = pd.read_excel(io.BytesIO(xlsx_bytes))
-    log.info("Excel прочитан: %d строк, колонки: %s", len(df), list(df.columns))
+    # ── Парсинг выписки Raiffeisen Excel ─────────────────────────────────
+    # Структура файла:
+    #   строки 0-8:  метаданные (банк, клиент, ИНН и т.д.)
+    #   строка 9:    заголовки колонок
+    #   строки 10-11: подзаголовки и нумерация — пропускаем
+    #   строки 12+:  операции
+    #   последние 4: итоговые строки (Обороты, Остаток и т.д.)
+    raw = pd.read_excel(io.BytesIO(xlsx_bytes), header=None)
+    log.info("Excel прочитан: %d строк", len(raw))
+
+    # Данные с строки 12 (индекс 11), убираем последние 4 итоговые строки
+    data = raw.iloc[12:-4].copy()
+    data.columns = range(len(data.columns))
+
+    # Переименовываем нужные колонки в понятные для classify_operations имена
+    data = data.rename(columns={
+        2:  "Дата операции",
+        6:  "Контрагент",       # "Реквизиты корреспондента" → classifier ищет "контраг"
+        9:  "Дебет",
+        10: "Кредит",
+        11: "Назначение платежа",
+    })
+
+    # Оставляем только нужные колонки
+    keep = ["Дата операции", "Контрагент", "Дебет", "Кредит", "Назначение платежа"]
+    df = data[keep].copy()
+
+    # Фильтруем строки без валидной даты (мусорные строки)
+    df["Дата операции"] = pd.to_datetime(df["Дата операции"], errors="coerce")
+    df = df.dropna(subset=["Дата операции"])
+    df = df[df["Дата операции"].dt.year >= 2020]
 
     if df.empty:
         return {"processed": 0, "months": []}
 
-    df["_target_month"] = df.iloc[:, 0].apply(lambda x: month_for_date(x, "Июнь"))
+    log.info("После фильтрации: %d операций", len(df))
+
+    df["_target_month"] = df["Дата операции"].apply(lambda x: month_for_date(x, "Июнь"))
     total_ops, months_updated = 0, []
     for m, sub_df in df.groupby("_target_month"):
-        sub_df = sub_df.drop(columns=["_target_month"])
+        sub_df = sub_df.drop(columns=["_target_month"]).reset_index(drop=True)
         result = classify_operations(sub_df, m)
         result["source"] = "raiffeisen_api"
         merge_month_data(m, result)
