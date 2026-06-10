@@ -1,12 +1,12 @@
 """
 Telegram-репортёр Новатора.
-Каждый вечер отправляет итоги дня в Telegram.
+Каждое утро в 8:00 МСК отправляет итоги вчерашнего дня в Telegram.
 """
 import os
 import logging
 import urllib.request
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 log = logging.getLogger("telegram_reporter")
 
@@ -41,7 +41,6 @@ def _tg_send(text: str) -> bool:
 
 
 def _fmt(n: float) -> str:
-    """Форматирует число: 14 787 332."""
     return f"{int(round(n)):,}".replace(",", " ")
 
 
@@ -52,21 +51,20 @@ def _pct(a: float, b: float) -> str:
 def build_daily_report(target_date: str | None = None) -> str:
     """
     Собирает итоги дня из БД.
-    target_date: 'YYYY-MM-DD' — если None, берёт сегодня.
+    target_date: 'YYYY-MM-DD' — если None, берёт вчера.
     """
     from database import get_month_data
 
-    today = datetime.now()
     if target_date:
         try:
             dt = datetime.strptime(target_date, "%Y-%m-%d")
         except ValueError:
-            dt = today
+            dt = datetime.now() - timedelta(days=1)
     else:
-        dt = today
+        dt = datetime.now() - timedelta(days=1)
 
-    date_str   = dt.strftime("%Y-%m-%d")   # для сравнения с ops
-    date_label = dt.strftime("%d.%m.%Y")   # для заголовка
+    date_str   = dt.strftime("%Y-%m-%d")
+    date_label = dt.strftime("%d.%m.%Y")
     month      = MONTH_NAMES.get(dt.month, "")
 
     data = get_month_data(month)
@@ -75,7 +73,6 @@ def build_daily_report(target_date: str | None = None) -> str:
 
     ops = data.get("ops", [])
 
-    # Операции только за нужный день
     day_ops    = [op for op in ops if op.get("date", "").startswith(date_str)]
     debit_ops  = [op for op in day_ops if op.get("is_debit")]
     credit_ops = [op for op in day_ops if not op.get("is_debit")]
@@ -86,7 +83,6 @@ def build_daily_report(target_date: str | None = None) -> str:
     total_out = sum(op.get("amount", 0) for op in debit_ops)
     total_in  = sum(op.get("amount", 0) for op in credit_ops)
 
-    # ── Заголовок ────────────────────────────────────────────────────────────
     lines = [
         f"<b>НОВАТОР · ИТОГИ ДНЯ {date_label}</b>",
         "",
@@ -95,7 +91,6 @@ def build_daily_report(target_date: str | None = None) -> str:
         "",
     ]
 
-    # ── Поступления от клиентов ───────────────────────────────────────────────
     if credit_ops:
         client_totals: dict[str, float] = {}
         for op in credit_ops:
@@ -109,7 +104,6 @@ def build_daily_report(target_date: str | None = None) -> str:
             lines.append(f"· {short} — {_fmt(s)} ₽")
         lines.append("")
 
-    # ── Расходы по категориям ────────────────────────────────────────────────
     if debit_ops:
         cat_totals: dict[str, float] = {}
         for op in debit_ops:
@@ -117,7 +111,6 @@ def build_daily_report(target_date: str | None = None) -> str:
             cat_totals[cat] = cat_totals.get(cat, 0) + op.get("amount", 0)
         cat_sorted = sorted(cat_totals.items(), key=lambda x: -x[1])
 
-        # Топ поставщики по лесу
         les_by_contr: dict[str, float] = {}
         for op in debit_ops:
             if op.get("cat") == "Лес":
@@ -139,13 +132,13 @@ def build_daily_report(target_date: str | None = None) -> str:
     return "\n".join(lines)
 
 
-# Алиас — чтобы main.py не ломался на старом имени
+# Алиас — main.py использует старое имя
 def build_weekly_report() -> str:
     return build_daily_report()
 
 
 def send_daily_report(target_date: str | None = None) -> dict:
-    """Основная точка входа — формирует и отправляет дневной отчёт."""
+    """Формирует и отправляет дневной отчёт."""
     if not TG_TOKEN or not TG_CHAT_ID:
         return {"status": "skip", "reason": "TG_TOKEN или TG_CHAT_ID не заданы"}
     try:
@@ -158,6 +151,6 @@ def send_daily_report(target_date: str | None = None) -> dict:
         return {"status": "error", "reason": str(e)}
 
 
-# Алиас для обратной совместимости с main.py
+# Алиас для обратной совместимости
 def send_weekly_report() -> dict:
     return send_daily_report()
