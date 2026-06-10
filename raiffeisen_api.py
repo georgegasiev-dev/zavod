@@ -217,6 +217,22 @@ def download_report(report_id: str, access_token: str, id_token: str) -> bytes:
 
 # ── Основная точка входа ──────────────────────────────────────────────────────
 
+def _normalize_date(d: str) -> str:
+    """Приводит дату к формату YYYY-MM-DD. Принимает DD.MM.YYYY или YYYY-MM-DD."""
+    if not d:
+        return d
+    d = d.strip()
+    if len(d) == 10 and d[4] == "-":
+        return d  # уже ISO
+    # DD.MM.YYYY → YYYY-MM-DD
+    parts = d.replace("/", ".").split(".")
+    if len(parts) == 3:
+        dd, mm, yyyy = parts
+        if len(yyyy) == 4:
+            return f"{yyyy}-{mm.zfill(2)}-{dd.zfill(2)}"
+    raise ValueError(f"Неизвестный формат даты: {d!r}. Ожидается YYYY-MM-DD или DD.MM.YYYY")
+
+
 def fetch_statements(date_from: str = None, date_to: str = None) -> bytes:
     """Запрашивает, ждёт и скачивает Excel-выписку. Возвращает байты файла."""
     if not date_from:
@@ -224,6 +240,8 @@ def fetch_statements(date_from: str = None, date_to: str = None) -> bytes:
     if not date_to:
         # Берём позавчера — выписка за вчера может быть ещё не готова
         date_to = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+    date_from = _normalize_date(date_from)
+    date_to   = _normalize_date(date_to)
 
     access_token, id_token = get_valid_tokens()
     account_key = _get_account_key(access_token, id_token)
