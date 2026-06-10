@@ -1,4 +1,4 @@
-# redeploy trigger 2026-06-09T19:51:52.950526
+# redeploy trigger 2026-06-10T06:26:57.395371
 """
 Новатор — платёжный мониторинг. FastAPI backend.
 Запуск: uvicorn main:app --reload --port 8000
