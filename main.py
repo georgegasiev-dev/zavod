@@ -529,7 +529,8 @@ async def raiffeisen_accounts(_: str = Depends(verify_admin)):
 @app.get("/api/raiffeisen/probe")
 async def raiffeisen_probe(_: str = Depends(verify_admin)):
     """Показывает полные данные счетов и пробует сгенерировать тестовую выписку."""
-    import urllib.request, urllib.error
+    import urllib.request, urllib.error, json
+    import datetime as dt
     from raiffeisen_api import get_valid_tokens, ACCOUNTS_API, STATEMENTS_API
 
     access_token, id_token = get_valid_tokens()
@@ -541,16 +542,17 @@ async def raiffeisen_probe(_: str = Depends(verify_admin)):
 
     # 1. Все поля счетов
     accounts_result = {}
-    try:
-        url = f"{ACCOUNTS_API}/api/v1/accounts?fields=Id,Number,Name,Currency,Cnum,ClientNumber,ClientId"
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as r:
-            accounts_result = {"code": r.status, "data": json.loads(r.read())}
-    except urllib.error.HTTPError as e:
-        accounts_result = {"code": e.code, "body": e.read().decode()[:300]}
+    for fields in ["Id,Number,Name,Currency,Cnum", "Id,Number,Name,Currency", "Number,Cnum,Cusid", "Id,Number,Cusid"]:
+        try:
+            url = f"{ACCOUNTS_API}/api/v1/accounts?fields={fields}"
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as r:
+                accounts_result[fields] = json.loads(r.read())
+                break  # первый успешный — стоп
+        except urllib.error.HTTPError as e:
+            accounts_result[fields] = {"code": e.code, "body": e.read().decode()[:200]}
 
     # 2. Тестовая генерация Excel (вчера)
-    import datetime as dt, json
     yesterday = (dt.date.today() - dt.timedelta(days=2)).isoformat()
     excel_result = {}
     try:
