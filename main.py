@@ -182,8 +182,8 @@ async def tg_webhook(request: Request):
     if cmd in ("/report", "отчёт", "отчет", "report"):
         await reply("⏳ Формирую отчёт...")
         try:
-            from telegram_reporter import build_weekly_report
-            report_text = build_weekly_report()
+            from telegram_reporter import build_daily_report
+            report_text = build_daily_report(target_date="today")
             await reply(report_text)
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
@@ -220,11 +220,11 @@ async def tg_webhook(request: Request):
         await reply(
             "👋 <b>Новатор · Отчётный бот</b>\n\n"
             "Доступные команды:\n\n"
-            "/report — отчёт за текущую неделю\n"
+            "/report — отчёт за сегодня\n"
             "/sync — загрузить свежую выписку из Gmail\n"
             "/status — состояние базы данных\n"
             "/help — эта справка\n\n"
-            "Автоотчёт приходит каждый день в 10:30 МСК 🕥"
+            "Автоотчёт приходит каждое утро в 8:00 МСК за предыдущий день 🕗"
         )
     else:
         await reply(
@@ -1065,3 +1065,4 @@ async def mcp_messages(session_id: str, request: Request):
     return JSONResponse(response)
 
 # redeploy-trigger: 2026-06-10T04:14:47.875173
+
