@@ -33,9 +33,30 @@ def _init():
                 created_at TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
         conn.commit()
 
 _init()
+
+
+def save_setting(key: str, value: str):
+    with _conn() as conn:
+        conn.execute("""
+            INSERT INTO settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+        """, (key, value))
+        conn.commit()
+
+
+def get_setting(key: str, default: str = None) -> str:
+    with _conn() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row['value'] if row else default
 
 def save_month_data(month: str, data: dict):
     now = datetime.now().isoformat()
