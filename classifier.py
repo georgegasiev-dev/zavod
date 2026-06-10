@@ -202,6 +202,7 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
             else:
                 if 0 <= wi < 5:
                     weeks_in[wi] += amt
+                cat_totals[cat] = cat_totals.get(cat, 0.0) + amt
 
             ops.append({
                 'date': date_str, 'contractor': contractor[:60],
