@@ -280,6 +280,25 @@ def fetch_statements(date_from: str = None, date_to: str = None) -> bytes:
     return download_report(report_id, access_token, id_token)
 
 
+def _send_excel_to_telegram(xlsx_bytes: bytes, date_from: str, date_to: str):
+    """Отправляет Excel-файл выписки в Telegram."""
+    import httpx, os
+    tg_token = os.getenv("TG_TOKEN", "8616497543:AAHo0UJBuRcbg-vElznHcIwkdBhL18DvVs0")
+    chat_id  = os.getenv("TG_CHAT_ID", "269628847")
+    filename = f"raiffeisen_{date_from}_{date_to}.xlsx"
+    try:
+        with httpx.Client(timeout=30) as client:
+            client.post(
+                f"https://api.telegram.org/bot{tg_token}/sendDocument",
+                data={"chat_id": chat_id, "caption": f"📊 Выписка Райффайзен {date_from} — {date_to}"},
+                files={"document": (filename, xlsx_bytes,
+                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+            )
+        log.info("Excel выписка отправлена в Telegram: %s", filename)
+    except Exception as e:
+        log.warning("Не удалось отправить Excel в Telegram: %s", e)
+
+
 def fetch_and_load(date_from: str = None, date_to: str = None) -> dict:
     """Получает выписку и сохраняет в БД."""
     import io
@@ -287,8 +306,17 @@ def fetch_and_load(date_from: str = None, date_to: str = None) -> dict:
     from classifier import classify_operations, month_for_date
     from database import merge_month_data
 
+    # Нормализуем даты для корректного имени файла
+    d_from = _normalize_date(date_from) if date_from else              (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+    d_to   = _normalize_date(date_to)   if date_to   else d_from
+
     xlsx_bytes = fetch_statements(date_from, date_to)
+
+    # Отправляем файл в Telegram для проверки
+    _send_excel_to_telegram(xlsx_bytes, d_from, d_to)
+
     df = pd.read_excel(io.BytesIO(xlsx_bytes))
+    log.info("Excel прочитан: %d строк, колонки: %s", len(df), list(df.columns))
 
     if df.empty:
         return {"processed": 0, "months": []}
