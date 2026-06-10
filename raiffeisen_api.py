@@ -92,7 +92,7 @@ def get_valid_tokens() -> tuple[str, str]:
 def _get_accounts(access_token: str, id_token: str) -> list[dict]:
     import urllib.request
     req = urllib.request.Request(
-        f"{ACCOUNTS_API}/api/v1/accounts?fields=Id,Number,Name,Currency,Cnum,ClientNumber",
+        f"{ACCOUNTS_API}/api/v1/accounts?fields=Id,Number,Name,Currency,Cnum",
         headers={
             "Authorization": f"Bearer {access_token}",
             "ID-Token": id_token,
