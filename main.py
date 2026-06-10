@@ -355,33 +355,53 @@ async def reclassify_op(
     _: str = Depends(verify_admin),
 ):
     """
-    Меняет категорию платежа и запоминает контрагента в справочнике.
-    payload = {month, contractor, new_cat}
+    Меняет категорию платежа.
+    Если переданы date + amount — меняет только одну конкретную операцию (из календаря).
+    Если не переданы — меняет все операции контрагента + сохраняет в справочник (устаревший режим).
+    payload = {month, contractor, new_cat, [date], [amount]}
     """
-    month = payload.get("month")
+    month      = payload.get("month")
     contractor = ' '.join((payload.get("contractor") or "").lower().strip().split())
-    new_cat = payload.get("new_cat", "")
+    new_cat    = payload.get("new_cat", "")
+    op_date    = payload.get("date")     # если задано — одиночная операция
+    op_amount  = payload.get("amount")   # если задано — одиночная операция
 
     if not month or not contractor or not new_cat:
         raise HTTPException(status_code=400, detail="month, contractor, new_cat обязательны")
 
-    # 1. Обновляем ops в БД — меняем cat у всех ops с этим контрагентом (во всех месяцах)
+    single_op = op_date is not None and op_amount is not None
+
     all_data = get_all_months()
     changed = 0
-    for m, data in all_data.items():
-        month_changed = False
+
+    if single_op:
+        # Меняем только одну конкретную операцию в данном месяце (без сохранения в справочник)
+        data = all_data.get(month, {})
         for op in data.get("ops", []):
-            if ' '.join((op.get("contractor") or "").lower().strip().split()) == contractor:
+            c_match = ' '.join((op.get("contractor") or "").lower().strip().split()) == contractor
+            d_match = str(op.get("date", ""))[:10] == str(op_date)[:10]
+            a_match = abs(float(op.get("amount", 0)) - float(op_amount)) < 0.5
+            if c_match and d_match and a_match:
                 op["cat"] = new_cat
                 changed += 1
-                month_changed = True
-        if month_changed:
-            save_month_data(m, data)
+                break  # меняем только первую совпавшую
+        if changed:
+            save_month_data(month, data)
+    else:
+        # Меняем все операции контрагента во всех месяцах + сохраняем в справочник
+        for m, data in all_data.items():
+            month_changed = False
+            for op in data.get("ops", []):
+                if ' '.join((op.get("contractor") or "").lower().strip().split()) == contractor:
+                    op["cat"] = new_cat
+                    changed += 1
+                    month_changed = True
+            if month_changed:
+                save_month_data(m, data)
+        save_contractor_mapping(contractor, new_cat)
 
-    # 2. Сохраняем в persistent справочник контрагентов
-    save_contractor_mapping(contractor, new_cat)
-
-    return {"status": "ok", "contractor": contractor, "new_cat": new_cat, "ops_updated": changed}
+    return {"status": "ok", "contractor": contractor, "new_cat": new_cat,
+            "ops_updated": changed, "single_op": single_op}
 
 
 # ── справочник контрагентов ───────────────────────────────────────────────────
