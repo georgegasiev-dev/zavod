@@ -195,26 +195,40 @@ def wait_for_report(report_id: str, access_token: str, id_token: str,
     deadline = time.time() + max_wait
     last_status = "UNKNOWN"
     last_body   = ""
+    consecutive_errors = 0
     with httpx.Client(timeout=15) as client:
         while time.time() < deadline:
             try:
                 resp = client.get(url, headers=headers)
-                last_body = resp.text[:200]
+                last_body = resp.text[:300]
                 if not resp.is_success:
-                    log.warning("Status check %s → %s: %s", report_id, resp.status_code, last_body)
+                    consecutive_errors += 1
+                    log.warning("Status check %s → %s: %s (err #%d)",
+                                report_id, resp.status_code, last_body, consecutive_errors)
+                    if consecutive_errors >= 3:
+                        raise RuntimeError(
+                            f"Статус-опрос отчёта {report_id} отказывает: "
+                            f"HTTP {resp.status_code}: {last_body}"
+                        )
                     time.sleep(5)
                     continue
+                consecutive_errors = 0
                 data = resp.json()
                 last_status = data.get("status", "UNKNOWN")
                 log.info("Raiffeisen report status: %s", last_status)
                 if last_status == "COMPLETED":
                     return last_status
                 if last_status in ("FAILED", "STOPPED", "CANCELLED"):
-                    raise RuntimeError(f"Генерация отчёта завершилась со статусом {last_status}: {last_body}")
+                    raise RuntimeError(
+                        f"Генерация отчёта завершилась со статусом {last_status}: {last_body}"
+                    )
             except RuntimeError:
                 raise
             except Exception as e:
-                log.warning("Status poll error: %s", e)
+                consecutive_errors += 1
+                log.warning("Status poll exception #%d: %s", consecutive_errors, e)
+                if consecutive_errors >= 3:
+                    raise RuntimeError(f"Статус-опрос упал 3 раза подряд: {e}")
             time.sleep(5)
     raise RuntimeError(
         f"Таймаут ({max_wait}s) ожидания отчёта {report_id}. "
