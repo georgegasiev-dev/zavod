@@ -1,6 +1,7 @@
 """
 Telegram-репортёр Новатора.
 Каждое утро в 8:00 МСК отправляет итоги вчерашнего дня в Telegram.
+Ручной запрос /отчёт — итоги сегодня.
 """
 import os
 import logging
@@ -20,7 +21,6 @@ MONTH_NAMES = {
 
 
 def _tg_send(text: str) -> bool:
-    """Отправляет сообщение в Telegram."""
     if not TG_TOKEN or not TG_CHAT_ID:
         log.warning("TG_TOKEN или TG_CHAT_ID не заданы")
         return False
@@ -51,11 +51,16 @@ def _pct(a: float, b: float) -> str:
 def build_daily_report(target_date: str | None = None) -> str:
     """
     Собирает итоги дня из БД.
-    target_date: 'YYYY-MM-DD' — если None, берёт вчера.
+    target_date:
+      None        → вчера (для автоотчёта в 8:00)
+      "today"     → сегодня (для ручного запроса /отчёт)
+      "YYYY-MM-DD"→ конкретная дата
     """
     from database import get_month_data
 
-    if target_date:
+    if target_date == "today":
+        dt = datetime.now()
+    elif target_date:
         try:
             dt = datetime.strptime(target_date, "%Y-%m-%d")
         except ValueError:
@@ -132,13 +137,11 @@ def build_daily_report(target_date: str | None = None) -> str:
     return "\n".join(lines)
 
 
-# Алиас — main.py использует старое имя
 def build_weekly_report() -> str:
-    return build_daily_report()
+    return build_daily_report()  # автоотчёт → вчера
 
 
 def send_daily_report(target_date: str | None = None) -> dict:
-    """Формирует и отправляет дневной отчёт."""
     if not TG_TOKEN or not TG_CHAT_ID:
         return {"status": "skip", "reason": "TG_TOKEN или TG_CHAT_ID не заданы"}
     try:
@@ -151,6 +154,5 @@ def send_daily_report(target_date: str | None = None) -> dict:
         return {"status": "error", "reason": str(e)}
 
 
-# Алиас для обратной совместимости
 def send_weekly_report() -> dict:
-    return send_daily_report()
+    return send_daily_report()  # автоотчёт → вчера
