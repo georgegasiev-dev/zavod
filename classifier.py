@@ -74,6 +74,7 @@ KEYWORDS = [
     ('Свет',          r'электр|энерг|освещ|тнс'),
     ('Вывоз мусора',  r'вывоз мусора|утилиз|обрезь|обрезки'),
     ('Адм.',          r'комиссия|абонент|бухгалтер|юридич|сопровожден|обслужив|интернет|связь|печать'),
+    ('ФССП',          r'фссп|арест|удержани|взыскани|судебн пристав'),
     ('Расходники',    r'запчаст|ротор|двигатель|ремонт|инструмент|химикат|реагент'),
 ]
 
@@ -177,7 +178,8 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
             if not (amt > 0):
                 continue
 
-            contractor = str(row.get(contr_col, '') or '')
+            raw_contr  = row.get(contr_col, '')
+        contractor = '' if (raw_contr is None or str(raw_contr).strip().lower() == 'nan') else str(raw_contr)
             desc       = str(row.get(desc_col,  '') or '')
             date_val   = row.get(date_col)
             # Кредитные операции — всегда "Поступления от клиентов"
