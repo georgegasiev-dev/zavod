@@ -558,8 +558,10 @@ async def get_account_balance():
     if balance is None:
         return {"balance": None, "updated_at": None}
     try:
+        from datetime import timezone, timedelta
         dt = datetime.fromisoformat(updated)
-        updated_fmt = dt.strftime("%d.%m %H:%M")
+        msk = dt + timedelta(hours=3)   # Railway работает в UTC → МСК UTC+3
+        updated_fmt = msk.strftime("%d.%m %H:%M")
     except Exception:
         updated_fmt = updated
     return {
