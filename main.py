@@ -549,6 +549,26 @@ async def raiffeisen_sync_status(job_id: str, _: str = Depends(verify_admin)):
     return job
 
 
+@app.get("/api/balance")
+async def get_account_balance():
+    """Остаток на счёте после последней синхронизации."""
+    from database import get_setting
+    balance = get_setting("account_balance")
+    updated = get_setting("balance_updated_at")
+    if balance is None:
+        return {"balance": None, "updated_at": None}
+    try:
+        dt = datetime.fromisoformat(updated)
+        updated_fmt = dt.strftime("%d.%m %H:%M")
+    except Exception:
+        updated_fmt = updated
+    return {
+        "balance":     float(balance),
+        "updated_at":  updated,
+        "updated_fmt": updated_fmt,
+    }
+
+
 @app.get("/api/raiffeisen/accounts")
 async def raiffeisen_accounts(_: str = Depends(verify_admin)):
     """Отладка: список счетов из Raiffeisen API."""
