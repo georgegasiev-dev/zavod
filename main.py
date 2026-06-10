@@ -554,20 +554,19 @@ async def raiffeisen_probe(_: str = Depends(verify_admin)):
 
     # 2. Тестовая генерация Excel
     from raiffeisen_api import _get_account_key, _auth_headers
-    account_key = _get_account_key(access_token, id_token)
     yesterday = (dt.date.today() - dt.timedelta(days=2)).isoformat()
 
-    # диагностика токенов
     token_info = {
         "access_token_len": len(access_token),
-        "id_token_len": len(id_token),
-        "id_token_empty": not bool(id_token),
-        "account_key": account_key,
-        "date": yesterday,
+        "id_token_len":     len(id_token),
+        "id_token_empty":   not bool(id_token),
+        "date":             yesterday,
     }
 
     excel_result = {}
     try:
+        account_key = _get_account_key(access_token, id_token)
+        token_info["account_key"] = account_key
         body = json.dumps({
             "accountKeys": [account_key],
             "from": yesterday,
@@ -588,6 +587,8 @@ async def raiffeisen_probe(_: str = Depends(verify_admin)):
     return {"accounts": accounts_result, "token_info": token_info, "excel_test": excel_result}
 
 
+@app.get("/api/raiffeisen/status")
+async def raiffeisen_auth_status(_: str = Depends(verify_admin)):
     """Статус авторизации Raiffeisen API."""
     from raiffeisen_api import load_token, get_auth_url, CLIENT_ID
     if not CLIENT_ID:
