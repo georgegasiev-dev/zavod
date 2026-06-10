@@ -261,13 +261,25 @@ def _normalize_date(d: str) -> str:
     raise ValueError(f"Неизвестный формат даты: {d!r}. Ожидается YYYY-MM-DD или DD.MM.YYYY")
 
 
+def _current_week_range() -> tuple[str, str]:
+    """Возвращает (понедельник, сегодня) для текущей недели в формате YYYY-MM-DD."""
+    import datetime as _dt
+    today     = _dt.date.today()
+    monday    = today - _dt.timedelta(days=today.weekday())   # weekday(): 0=пн, 6=вс
+    sunday    = monday + _dt.timedelta(days=6)
+    week_end  = min(sunday, today)                             # не выходим за сегодня
+    return monday.strftime("%Y-%m-%d"), week_end.strftime("%Y-%m-%d")
+
+
 def fetch_statements(date_from: str = None, date_to: str = None) -> bytes:
     """Запрашивает, ждёт и скачивает Excel-выписку. Возвращает байты файла."""
-    if not date_from:
-        date_from = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
-    if not date_to:
-        # Берём позавчера — выписка за вчера может быть ещё не готова
-        date_to = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
+    if not date_from and not date_to:
+        date_from, date_to = _current_week_range()
+        log.info("Период не задан — берём текущую неделю: %s … %s", date_from, date_to)
+    elif not date_from:
+        date_from = _normalize_date(date_to)
+    elif not date_to:
+        date_to = _normalize_date(date_from)
     date_from = _normalize_date(date_from)
     date_to   = _normalize_date(date_to)
 
