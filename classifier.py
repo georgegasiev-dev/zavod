@@ -179,7 +179,7 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
                 continue
 
             raw_contr  = row.get(contr_col, '')
-        contractor = '' if (raw_contr is None or str(raw_contr).strip().lower() == 'nan') else str(raw_contr)
+            contractor = '' if (raw_contr is None or str(raw_contr).strip().lower() == 'nan') else str(raw_contr)
             desc       = str(row.get(desc_col,  '') or '')
             date_val   = row.get(date_col)
             # Кредитные операции — всегда "Поступления от клиентов"
