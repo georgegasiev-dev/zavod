@@ -4,7 +4,7 @@
 Запуск: uvicorn main:app --reload --port 8000
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, Form, Request
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, Form, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import JSONResponse
