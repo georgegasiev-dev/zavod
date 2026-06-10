@@ -186,26 +186,40 @@ def generate_excel_report(account_key: str, date_from: str, date_to: str,
 
 
 def wait_for_report(report_id: str, access_token: str, id_token: str,
-                    max_wait: int = 120) -> str:
+                    max_wait: int = 300) -> str:
     """Ждёт готовности отчёта, возвращает финальный статус."""
     import httpx
     headers = {k: v for k, v in _auth_headers(access_token, id_token).items()
                if k != "Content-Type"}
     url = f"{STATEMENTS_API}/v1/reports/{report_id}/status"
     deadline = time.time() + max_wait
+    last_status = "UNKNOWN"
+    last_body   = ""
     with httpx.Client(timeout=15) as client:
         while time.time() < deadline:
-            resp = client.get(url, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            status = data.get("status", "UNKNOWN")
-            log.info("Raiffeisen report status: %s", status)
-            if status == "COMPLETED":
-                return status
-            if status in ("FAILED", "STOPPED", "CANCELLED"):
-                raise RuntimeError(f"Генерация отчёта завершилась: {status}")
+            try:
+                resp = client.get(url, headers=headers)
+                last_body = resp.text[:200]
+                if not resp.is_success:
+                    log.warning("Status check %s → %s: %s", report_id, resp.status_code, last_body)
+                    time.sleep(5)
+                    continue
+                data = resp.json()
+                last_status = data.get("status", "UNKNOWN")
+                log.info("Raiffeisen report status: %s", last_status)
+                if last_status == "COMPLETED":
+                    return last_status
+                if last_status in ("FAILED", "STOPPED", "CANCELLED"):
+                    raise RuntimeError(f"Генерация отчёта завершилась со статусом {last_status}: {last_body}")
+            except RuntimeError:
+                raise
+            except Exception as e:
+                log.warning("Status poll error: %s", e)
             time.sleep(5)
-    raise RuntimeError(f"Таймаут ожидания отчёта {report_id}")
+    raise RuntimeError(
+        f"Таймаут ({max_wait}s) ожидания отчёта {report_id}. "
+        f"Последний статус: {last_status}. Тело: {last_body}"
+    )
 
 
 def download_report(report_id: str, access_token: str, id_token: str) -> bytes:
