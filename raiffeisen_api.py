@@ -139,12 +139,14 @@ def _get_account_key(access_token: str, id_token: str) -> str:
 # ── Генерация и скачивание выписки ───────────────────────────────────────────
 
 def _auth_headers(access_token: str, id_token: str) -> dict:
-    return {
+    headers = {
         "Authorization": f"Bearer {access_token}",
-        "Id-Token":      id_token,
         "Content-Type":  "application/json",
         "Accept":        "application/json",
     }
+    if id_token:
+        headers["Id-Token"] = id_token
+    return headers
 
 
 def _post(url: str, body: dict, headers: dict) -> dict:
