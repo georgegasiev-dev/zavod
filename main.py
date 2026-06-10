@@ -488,19 +488,45 @@ async def raiffeisen_callback(code: str = None, state: str = None, error: str = 
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Хранилище статусов фоновых задач синхронизации
+_sync_jobs: dict = {}
+
+
+def _run_sync_job(job_id: str, date_from: str, date_to: str):
+    """Выполняется в фоне — синхронизирует данные Raiffeisen."""
+    import time
+    _sync_jobs[job_id] = {"status": "running", "started_at": time.time()}
+    try:
+        from raiffeisen_api import fetch_and_load
+        result = fetch_and_load(date_from, date_to)
+        _sync_jobs[job_id] = {"status": "ok", **result}
+    except Exception as e:
+        _sync_jobs[job_id] = {"status": "error", "detail": str(e)[:500]}
+
+
 @app.post("/api/raiffeisen/sync")
 async def raiffeisen_sync(
+    background_tasks: BackgroundTasks,
     date_from: str = None,
     date_to:   str = None,
     _: str = Depends(verify_admin),
 ):
-    """Ручная синхронизация через Raiffeisen API."""
-    try:
-        from raiffeisen_api import fetch_and_load
-        result = fetch_and_load(date_from, date_to)
-        return {"status": "ok", **result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Запускает синхронизацию в фоне. Возвращает job_id для проверки статуса."""
+    import uuid, time
+    job_id = str(uuid.uuid4())[:8]
+    _sync_jobs[job_id] = {"status": "queued", "started_at": time.time()}
+    background_tasks.add_task(_run_sync_job, job_id, date_from, date_to)
+    return {"status": "started", "job_id": job_id,
+            "check_url": f"/api/raiffeisen/sync/{job_id}"}
+
+
+@app.get("/api/raiffeisen/sync/{job_id}")
+async def raiffeisen_sync_status(job_id: str, _: str = Depends(verify_admin)):
+    """Статус фоновой задачи синхронизации."""
+    job = _sync_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 @app.get("/api/raiffeisen/accounts")
