@@ -581,7 +581,7 @@ async def raiffeisen_probe(_: str = Depends(verify_admin)):
         with urllib.request.urlopen(req2, timeout=15) as r2:
             excel_result = {"code": r2.status, "data": json.loads(r2.read())}
     except urllib.error.HTTPError as e:
-        excel_result = {"code": e.code, "body": e.read().decode()[:500)}
+        excel_result = {"code": e.code, "body": e.read().decode()[:500]}
     except Exception as ex:
         excel_result = {"error": str(ex)[:300]}
 
