@@ -556,7 +556,9 @@ async def raiffeisen_probe(_: str = Depends(verify_admin)):
     yesterday = (dt.date.today() - dt.timedelta(days=2)).isoformat()
     excel_result = {}
     try:
-        body = json.dumps({"accountKeys": ["40702810523000116944"], "from": yesterday, "to": yesterday}).encode()
+        from raiffeisen_api import _get_account_key
+        account_key = _get_account_key(access_token, id_token)
+        body = json.dumps({"accountKeys": [account_key], "from": yesterday, "to": yesterday}).encode()
         req = urllib.request.Request(
             f"{STATEMENTS_API}/v1/reports/excel", data=body,
             headers={**headers, "Content-Type": "application/json"}
