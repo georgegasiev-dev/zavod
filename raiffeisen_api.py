@@ -359,6 +359,10 @@ def fetch_and_load(date_from: str = None, date_to: str = None) -> dict:
     df = df.dropna(subset=["Дата операции"])
     df = df[df["Дата операции"].dt.year >= 2020]
 
+    # NaN → 0 чтобы сравнения raw_debit == 0 работали корректно
+    df["Дебет"]  = pd.to_numeric(df["Дебет"],  errors="coerce").fillna(0)
+    df["Кредит"] = pd.to_numeric(df["Кредит"], errors="coerce").fillna(0)
+
     if df.empty:
         return {"processed": 0, "months": []}
 
