@@ -966,3 +966,5 @@ async def mcp_messages(session_id: str, request: Request):
         await SESSIONS[session_id].put(response)
 
     return JSONResponse(response)
+
+# redeploy-trigger: 2026-06-10T04:14:47.875173
