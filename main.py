@@ -552,38 +552,40 @@ async def raiffeisen_probe(_: str = Depends(verify_admin)):
         except urllib.error.HTTPError as e:
             accounts_result[fields] = {"code": e.code, "body": e.read().decode()[:200]}
 
-    # 2. Тестовая генерация Excel — перебираем варианты тела запроса
-    from raiffeisen_api import _get_account_key
+    # 2. Тестовая генерация Excel
+    from raiffeisen_api import _get_account_key, _auth_headers
     account_key = _get_account_key(access_token, id_token)
     yesterday = (dt.date.today() - dt.timedelta(days=2)).isoformat()
 
-    variants = [
-        {"accountKey":  account_key,   "startDate": yesterday, "endDate": yesterday},
-        {"accountKey":  account_key,   "dateFrom":  yesterday, "dateTo":  yesterday},
-        {"accountKey":  account_key,   "from":      yesterday, "to":      yesterday},
-        {"accountKeys": [account_key], "startDate": yesterday, "endDate": yesterday},
-        {"accountKeys": [account_key], "dateFrom":  yesterday, "dateTo":  yesterday},
-        {"accountKeys": [account_key], "from":      yesterday, "to":      yesterday},
-    ]
+    # диагностика токенов
+    token_info = {
+        "access_token_len": len(access_token),
+        "id_token_len": len(id_token),
+        "id_token_empty": not bool(id_token),
+        "account_key": account_key,
+        "date": yesterday,
+    }
 
-    excel_results = {}
-    for v in variants:
-        key = str(v)[:80]
-        try:
-            body = json.dumps(v).encode()
-            req2 = urllib.request.Request(
-                f"{STATEMENTS_API}/v1/reports/excel", data=body,
-                headers={**headers, "Content-Type": "application/json"}
-            )
-            with urllib.request.urlopen(req2, timeout=15) as r2:
-                excel_results[key] = {"code": r2.status, "data": json.loads(r2.read())}
-            break  # нашли рабочий вариант — стоп
-        except urllib.error.HTTPError as e:
-            excel_results[key] = {"code": e.code, "body": e.read().decode()[:300]}
-        except Exception as ex:
-            excel_results[key] = {"error": str(ex)[:200]}
+    excel_result = {}
+    try:
+        body = json.dumps({
+            "accountKeys": [account_key],
+            "from": yesterday,
+            "to":   yesterday,
+        }).encode()
+        stmt_headers = _auth_headers(access_token, id_token)
+        req2 = urllib.request.Request(
+            f"{STATEMENTS_API}/v1/reports/excel", data=body,
+            headers=stmt_headers
+        )
+        with urllib.request.urlopen(req2, timeout=15) as r2:
+            excel_result = {"code": r2.status, "data": json.loads(r2.read())}
+    except urllib.error.HTTPError as e:
+        excel_result = {"code": e.code, "body": e.read().decode()[:500)}
+    except Exception as ex:
+        excel_result = {"error": str(ex)[:300]}
 
-    return {"accounts": accounts_result, "excel_variants": excel_results}
+    return {"accounts": accounts_result, "token_info": token_info, "excel_test": excel_result}
 
 
     """Статус авторизации Raiffeisen API."""
