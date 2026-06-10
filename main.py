@@ -565,22 +565,31 @@ async def raiffeisen_probe(_: str = Depends(verify_admin)):
 
     excel_result = {}
     try:
+        import httpx
         account_key = _get_account_key(access_token, id_token)
         token_info["account_key"] = account_key
-        body = json.dumps({
+        payload = {
             "accountKeys": [account_key],
             "from": yesterday,
             "to":   yesterday,
-        }).encode()
+        }
         stmt_headers = _auth_headers(access_token, id_token)
-        req2 = urllib.request.Request(
-            f"{STATEMENTS_API}/v1/reports/excel", data=body,
-            headers=stmt_headers
-        )
-        with urllib.request.urlopen(req2, timeout=15) as r2:
-            excel_result = {"code": r2.status, "data": json.loads(r2.read())}
-    except urllib.error.HTTPError as e:
-        excel_result = {"code": e.code, "body": e.read().decode()[:500]}
+        url = f"{STATEMENTS_API}/v1/reports/excel"
+        token_info["request_url"] = url
+        token_info["request_headers"] = {
+            k: (v[:30] + "...") if k == "Authorization" else (v[:20] + "...") if k == "Id-Token" else v
+            for k, v in stmt_headers.items()
+        }
+        async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+            resp = await client.post(url, json=payload, headers=stmt_headers)
+            token_info["redirect"] = resp.is_redirect
+            token_info["response_code"] = resp.status_code
+            if resp.is_redirect:
+                token_info["location"] = resp.headers.get("location", "")
+            if resp.status_code in (200, 202):
+                excel_result = {"code": resp.status_code, "data": resp.json()}
+            else:
+                excel_result = {"code": resp.status_code, "body": resp.text[:500]}
     except Exception as ex:
         excel_result = {"error": str(ex)[:300]}
 
