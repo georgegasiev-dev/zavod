@@ -154,7 +154,8 @@ def _post(url: str, body: dict, headers: dict) -> dict:
     h = {k: v for k, v in headers.items() if k != "Content-Type"}
     with httpx.Client(timeout=30) as client:
         resp = client.post(url, json=body, headers=h)
-        resp.raise_for_status()
+        if not resp.is_success:
+            raise RuntimeError(f"POST {url} → {resp.status_code}: {resp.text[:500]}")
         return resp.json() if resp.content else {}
 
 
@@ -219,10 +220,10 @@ def download_report(report_id: str, access_token: str, id_token: str) -> bytes:
 def fetch_statements(date_from: str = None, date_to: str = None) -> bytes:
     """Запрашивает, ждёт и скачивает Excel-выписку. Возвращает байты файла."""
     if not date_from:
-        date_from = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        date_from = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
     if not date_to:
-        # MT940 требует to != текущая дата; берём вчера
-        date_to = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        # Берём позавчера — выписка за вчера может быть ещё не готова
+        date_to = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
 
     access_token, id_token = get_valid_tokens()
     account_key = _get_account_key(access_token, id_token)
