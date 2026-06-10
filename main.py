@@ -625,19 +625,19 @@ async def raiffeisen_probe(_: str = Depends(verify_admin)):
 @app.get("/api/raiffeisen/status")
 async def raiffeisen_auth_status(_: str = Depends(verify_admin)):
     """Статус авторизации Raiffeisen API."""
-    from raiffeisen_api import load_token, get_auth_url, CLIENT_ID
+    from raiffeisen_api import load_token, CLIENT_ID
     if not CLIENT_ID:
         return {"status": "not_configured", "message": "RAIFFEISEN_CLIENT_ID не задан"}
     token = load_token()
     if not token:
-        return {"status": "not_authorized", "auth_url": get_auth_url()}
+        return {"status": "not_authorized"}
     from datetime import datetime, timedelta
     saved_at   = datetime.fromisoformat(token.get("saved_at", "2000-01-01"))
     expires_in = int(token.get("expires_in", 3600))
     expires_at = saved_at + timedelta(seconds=expires_in)
     return {
-        "status":     "authorized",
-        "expires_at": expires_at.isoformat(),
+        "status":      "authorized",
+        "expires_at":  expires_at.isoformat(),
         "has_refresh": bool(token.get("refresh_token")),
     }
 
