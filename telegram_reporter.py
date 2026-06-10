@@ -68,7 +68,7 @@ def build_daily_report(target_date: str | None = None) -> str:
     else:
         dt = datetime.now() - timedelta(days=1)
 
-    date_str   = dt.strftime("%Y-%m-%d")
+    date_str   = dt.strftime("%d.%m.%Y")
     date_label = dt.strftime("%d.%m.%Y")
     month      = MONTH_NAMES.get(dt.month, "")
 
@@ -78,7 +78,7 @@ def build_daily_report(target_date: str | None = None) -> str:
 
     ops = data.get("ops", [])
 
-    day_ops    = [op for op in ops if op.get("date", "").startswith(date_str)]
+    day_ops    = [op for op in ops if op.get("date", "") == date_str]
     debit_ops  = [op for op in day_ops if op.get("is_debit")]
     credit_ops = [op for op in day_ops if not op.get("is_debit")]
 
