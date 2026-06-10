@@ -175,6 +175,7 @@ def generate_excel_report(account_key: str, date_from: str, date_to: str,
         "accountKeys": [account_key],
         "from": date_from,
         "to":   date_to,
+        "intraday": True,   # включает операции текущего дня в реальном времени
     }
     headers = _auth_headers(access_token, id_token)
     resp = _post(f"{STATEMENTS_API}/v1/reports/excel", body, headers)
