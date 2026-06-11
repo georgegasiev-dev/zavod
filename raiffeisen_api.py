@@ -325,8 +325,6 @@ def fetch_and_load(date_from: str = None, date_to: str = None) -> dict:
 
     xlsx_bytes = fetch_statements(date_from, date_to)
 
-    # Отправляем файл в Telegram для проверки
-    _send_excel_to_telegram(xlsx_bytes, d_from, d_to)
 
     # ── Парсинг выписки Raiffeisen Excel ─────────────────────────────────
     # Структура файла:
