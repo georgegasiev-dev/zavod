@@ -280,12 +280,7 @@ async def tg_webhook(request: Request):
             return {"ok": True}
         if bot_password and password == bot_password:
             add_allowed_user(chat_id)
-            await reply(
-                "✅ Добро пожаловать в Новатор!
-
-"
-                "Напишите /help чтобы увидеть доступные команды."
-            )
+            await reply("✅ Добро пожаловать в Новатор!\n\nНапишите /help чтобы увидеть доступные команды.")
         else:
             await reply("❌ Неверный пароль.")
         return {"ok": True}
