@@ -306,19 +306,23 @@ async def tg_webhook(request: Request):
             # Формируем читаемое сообщение
             ops      = result.get("ops_saved", result.get("ops_loaded", result.get("ops", 0)))
             months   = result.get("months", [])
-            months_s = ", ".join(months) if months else "—"
             rec      = result.get("reconciliation", {})
             balance  = rec.get("closing_balance")
             ok_rec   = rec.get("ok", True)
 
+            # Показываем только текущий месяц, остальные — фоновое обновление
+            from datetime import datetime
+            MONTH_NAMES = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+                           7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+            cur_month = MONTH_NAMES.get(datetime.now().month, "")
+
             msg = f"✅ Выписка загружена\n"
-            msg += f"Операций: {ops}\n"
-            msg += f"Месяц(ы): {months_s}\n"
+            msg += f"Операций за {cur_month}: {ops}\n"
             if balance is not None:
                 b_fmt = f"{int(round(balance)):,}".replace(",", "\u00a0")
-                msg += f"Баланс на конец: {b_fmt} ₽"
+                msg += f"Баланс на счёте: {b_fmt} ₽"
                 if not ok_rec:
-                    msg += " ⚠️ расхождение в выписке"
+                    msg += " ⚠️ расхождение"
             await reply(msg)
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
