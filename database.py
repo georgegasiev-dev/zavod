@@ -250,3 +250,48 @@ def get_all_plans() -> dict:
             return {r['month']: {**json.loads(r['data']), 'updated_at': r['updated_at']} for r in rows}
         except Exception:
             return {}
+
+
+# ── Разрешённые пользователи Telegram ────────────────────────────────────────
+
+def _ensure_users_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tg_allowed_users (
+            chat_id    TEXT PRIMARY KEY,
+            added_at   TEXT NOT NULL
+        )
+    """)
+
+
+def add_allowed_user(chat_id: str):
+    """Добавляет пользователя в список разрешённых."""
+    with _conn() as conn:
+        _ensure_users_table(conn)
+        conn.execute("""
+            INSERT INTO tg_allowed_users (chat_id, added_at)
+            VALUES (?, datetime('now'))
+            ON CONFLICT(chat_id) DO NOTHING
+        """, (str(chat_id),))
+        conn.commit()
+
+
+def get_allowed_users() -> list[str]:
+    """Возвращает список разрешённых chat_id."""
+    with _conn() as conn:
+        try:
+            _ensure_users_table(conn)
+            conn.commit()
+            rows = conn.execute("SELECT chat_id FROM tg_allowed_users").fetchall()
+            return [r['chat_id'] for r in rows]
+        except Exception:
+            return []
+
+
+def remove_allowed_user(chat_id: str):
+    """Удаляет пользователя из списка разрешённых."""
+    with _conn() as conn:
+        try:
+            conn.execute("DELETE FROM tg_allowed_users WHERE chat_id=?", (str(chat_id),))
+            conn.commit()
+        except Exception:
+            pass
