@@ -15,7 +15,8 @@ from datetime import datetime
 from classifier import classify_operations
 from database import (save_month_data, merge_month_data, get_month_data, get_all_months,
                        get_last_upload, save_contractor_mapping, save_contractor_comment,
-                       save_plan, get_plan, get_all_plans)
+                       save_plan, get_plan, get_all_plans,
+                       add_allowed_user, get_allowed_users, remove_allowed_user)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -264,12 +265,33 @@ async def tg_webhook(request: Request):
     chat_id = str(msg.get("chat", {}).get("id", ""))
     text    = (msg.get("text") or "").strip()
 
-    # Список разрешённых chat_id (владелец + коллеги)
-    allowed_ids_str = os.getenv("TG_ALLOWED_IDS", tg_chat)
-    allowed_ids = [x.strip() for x in allowed_ids_str.split(",")]
+    # Владелец всегда имеет доступ, остальные — через пароль
+    bot_password = os.getenv("TG_BOT_PASSWORD", "")
+    allowed_ids  = get_allowed_users()        # из БД
+    owner_id     = tg_chat
+    is_allowed   = chat_id == owner_id or chat_id in allowed_ids
 
-    if chat_id not in allowed_ids:
-        log.info("Неизвестный chat_id %s написал: %s", chat_id, text)
+    # Обработка /start [пароль]
+    if text.lower().startswith("/start"):
+        parts    = text.split(maxsplit=1)
+        password = parts[1].strip() if len(parts) > 1 else ""
+        if chat_id == owner_id or chat_id in allowed_ids:
+            await reply("✅ У вас уже есть доступ. Напишите /help.")
+            return {"ok": True}
+        if bot_password and password == bot_password:
+            add_allowed_user(chat_id)
+            await reply(
+                "✅ Добро пожаловать в Новатор!
+
+"
+                "Напишите /help чтобы увидеть доступные команды."
+            )
+        else:
+            await reply("❌ Неверный пароль.")
+        return {"ok": True}
+
+    if not is_allowed:
+        await reply("🔒 Введите /start ПАРОЛЬ для получения доступа.")
         return {"ok": True}
 
     async def reply(txt: str):
@@ -346,7 +368,7 @@ async def tg_webhook(request: Request):
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
-    elif cmd in ("/start", "/help", "help", "помощь"):
+    elif cmd in ("/help", "help", "помощь"):
         await reply(
             "👋 <b>Новатор · Отчётный бот</b>\n\n"
             "<b>Команды:</b>\n"
