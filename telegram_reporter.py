@@ -96,6 +96,17 @@ def _pct(fact: float, plan: float) -> str | None:
     return f"{fact / plan * 100:.0f}%"
 
 
+
+def _week_fact_by_cat(ops: list, week_idx: int) -> dict[str, float]:
+    """Считает фактические расходы по категориям за всю неделю (по week_idx)."""
+    totals: dict[str, float] = {}
+    for op in ops:
+        if op.get("is_debit") and op.get("week") == week_idx:
+            cat = op.get("cat", "")
+            totals[cat] = totals.get(cat, 0) + op.get("amount", 0)
+    return totals
+
+
 def _get_balance() -> str | None:
     """Возвращает последний известный баланс счёта из БД."""
     try:
@@ -253,14 +264,21 @@ def build_evening_report(target_date: str | None = None) -> str:
             cat_contrs.setdefault(cat, {})
             cat_contrs[cat][c] = cat_contrs[cat].get(c, 0) + amt
 
+        # Факт за всю неделю по категориям
+        all_ops  = data.get("ops", [])
+        week_fact = _week_fact_by_cat(all_ops, week_idx) if week_idx is not None else {}
+
         lines.append("<b>Расходы:</b>")
         for cat, s in sorted(cat_totals.items(), key=lambda x: -x[1]):
-            plan_key = CAT_TO_PLAN_KEY.get(cat)
-            plan_val = week_plan.get(plan_key, 0) if plan_key else 0
-            pct_cat  = _pct(s, plan_val)
+            plan_key  = CAT_TO_PLAN_KEY.get(cat)
+            plan_val  = week_plan.get(plan_key, 0) if plan_key else 0
+            pct_cat   = _pct(s, plan_val)
+            week_total = week_fact.get(cat, 0)
 
             cat_line = f"  {cat} — {_fmt(s)} руб."
-            if pct_cat:
+            if week_total > s:
+                cat_line += f" (Всего {_fmt(week_total)} с начала недели)"
+            elif pct_cat:
                 cat_line += f" ({pct_cat} от плана недели)"
             lines.append(cat_line)
 
