@@ -295,3 +295,39 @@ def remove_allowed_user(chat_id: str):
             conn.commit()
         except Exception:
             pass
+
+
+# ── Лог доступа ───────────────────────────────────────────────────────────────
+
+def log_access(action: str, ip: str = "—", details: str = ""):
+    """Записывает событие в лог доступа."""
+    with _conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS access_log (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                action     TEXT NOT NULL,
+                ip         TEXT DEFAULT '—',
+                details    TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO access_log (action, ip, details, created_at)
+            VALUES (?, ?, ?, datetime('now'))
+        """, (action, ip, details))
+        conn.commit()
+
+
+def get_access_log(limit: int = 50) -> list[dict]:
+    """Возвращает последние записи лога доступа."""
+    with _conn() as conn:
+        try:
+            rows = conn.execute("""
+                SELECT id, action, ip, details, created_at
+                FROM access_log
+                ORDER BY id DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
