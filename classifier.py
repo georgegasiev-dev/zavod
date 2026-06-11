@@ -180,6 +180,8 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
 
             raw_contr  = row.get(contr_col, '')
             contractor = '' if (raw_contr is None or str(raw_contr).strip().lower() == 'nan') else str(raw_contr)
+            # Заменяем ИНН на читаемое имя контрагента
+            contractor = INN_TO_NAME.get(contractor.strip(), contractor)
             desc       = str(row.get(desc_col,  '') or '')
             date_val   = row.get(date_col)
             # Кредитные операции — всегда "Поступления от клиентов"
@@ -248,3 +250,14 @@ MANUAL_MAP.update({
     'ооо "комус"': 'Расходники',
     'ооо "исток"': 'Прочие нераспознанные',
 })
+
+# Добавлено 11.06.2026
+MANUAL_MAP.update({
+    '522805261661': 'Лес',                          # ИП Нестеров Алексей Валерьевич (ИНН)
+    'ип нестеров алексей валерьевич': 'Лес',
+})
+
+# Замена ИНН на имя контрагента при парсинге
+INN_TO_NAME = {
+    '522805261661': 'ИП Нестеров Алексей Валерьевич',
+}
