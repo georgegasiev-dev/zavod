@@ -132,12 +132,18 @@ app.add_middleware(
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "novator2026")
 
-def verify_admin(creds: HTTPBasicCredentials = Depends(security)):
+def verify_admin(creds: HTTPBasicCredentials = Depends(security), request: Request = None):
     ok = (secrets.compare_digest(creds.username.encode(), ADMIN_USER.encode()) and
           secrets.compare_digest(creds.password.encode(), ADMIN_PASS.encode()))
     if not ok:
+        ip = request.headers.get("x-forwarded-for", request.client.host if request and request.client else "—")
+        log_access("login_failed", ip, f"Пользователь: {creds.username}")
+        _notify_owner(f"⚠️ <b>Неудачная попытка входа</b>\nПользователь: {creds.username}\nIP: {ip}")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             headers={"WWW-Authenticate": "Basic"})
+    ip = request.headers.get("x-forwarded-for", request.client.host if request and request.client else "—") if request else "—"
+    log_access("login_ok", ip, f"Пользователь: {creds.username}")
+    _notify_owner(f"🔑 <b>Вход в систему</b>\nПользователь: {creds.username}\nIP: {ip}")
     return creds.username
 
 # ── публичные эндпоинты ───────────────────────────────────────────────────────
