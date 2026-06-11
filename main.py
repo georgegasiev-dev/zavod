@@ -289,7 +289,7 @@ async def tg_webhook(request: Request):
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
-    elif cmd in ("/утро", "утро", "morning"):
+    elif cmd in ("/morning", "/утро", "утро", "morning"):
         await reply("⏳ Формирую утренний отчёт...")
         try:
             from telegram_reporter import build_morning_report
@@ -347,7 +347,7 @@ async def tg_webhook(request: Request):
             "👋 <b>Новатор · Отчётный бот</b>\n\n"
             "<b>Команды:</b>\n"
             "/report — вечерний отчёт за сегодня\n"
-            "/утро — утренний отчёт (итоги вчера)\n"
+            "/morning — утренний отчёт (итоги вчера)\n"
             "/sync — загрузить выписку из Raiffeisen\n"
             "/status — состояние базы данных\n"
             "/help — эта справка\n\n"
