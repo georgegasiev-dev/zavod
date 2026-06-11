@@ -54,14 +54,16 @@ CAT_TO_PLAN_KEY = {
 def _short_contractor(c: str) -> str:
     """Форматирует имя контрагента для отчёта."""
     c = c.strip()
-    # Если строка — только цифры (ИНН/КПП) — показываем как есть с пометкой
+    # Если строка — только цифры (ИНН) — показываем с пометкой
     if c.replace(" ", "").isdigit():
         return f"ИНН {c}"
     # Для ИП берём фамилию (последнее слово)
     if c.lower().startswith("ип "):
-        return c.split()[-1]
-    # Остальные — обрезаем до 45 символов
-    return c[:45] + ("…" if len(c) > 45 else "")
+        parts = c.split()
+        # ИП Фамилия Имя Отчество → берём первое слово после "ИП" (фамилия)
+        return parts[1] if len(parts) > 1 else c
+    # Для ООО/ЗАО/АО — обрезаем до 40 символов
+    return c[:40] + ("…" if len(c) > 40 else "")
 
 
 def _tg_send(text: str) -> bool:
@@ -265,11 +267,9 @@ def build_evening_report(target_date: str | None = None) -> str:
             # Детализация поставщиков для категорий с несколькими контрагентами
             contrs = cat_contrs.get(cat, {})
             if len(contrs) > 1 or cat in ("Лес", "Перевозка леса", "Смола", "Плёнка"):
-                lines.append("       кому:")
                 for c, v in sorted(contrs.items(), key=lambda x: -x[1]):
-                    # Короткое имя: последнее значимое слово для ИП
                     short_c = _short_contractor(c)
-                    lines.append(f"       · {short_c} {_fmt(v)}")
+                    lines.append(f"    {short_c} — {_fmt(v)} руб.")
 
     return "\n".join(lines)
 
