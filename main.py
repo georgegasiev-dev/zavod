@@ -299,15 +299,18 @@ async def tg_webhook(request: Request):
             await reply(f"❌ Ошибка: {e}")
 
     elif cmd in ("/sync", "sync", "обновить"):
-        await reply("⏳ Запрашиваю выписку из Gmail...")
+        await reply("⏳ Запрашиваю выписку из Raiffeisen API...")
         try:
-            from gmail_fetcher import fetch_and_upload
-            result = fetch_and_upload()
-            processed = result.get("processed", 0)
-            if processed > 0:
-                await reply(f"✅ Загружено выписок: {processed}")
+            from raiffeisen_api import fetch_and_load
+            result = fetch_and_load()
+            status = result.get("status", "")
+            ops    = result.get("ops_loaded", result.get("ops", 0))
+            month  = result.get("month", "")
+            if status == "ok":
+                await reply(f"✅ Выписка загружена: {ops} операций ({month})")
             else:
-                await reply("📭 Новых выписок в почте нет")
+                reason = result.get("reason", result.get("error", str(result)))
+                await reply(f"⚠️ {reason}")
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
@@ -333,7 +336,7 @@ async def tg_webhook(request: Request):
             "/report — отчёт о движении за сегодня\n"
             "/утро — утренний отчёт (итоги вчера)\n"
             "/утро — утренний отчёт (итоги вчера)\n"
-            "/sync — загрузить свежую выписку из Gmail\n"
+            "/sync — загрузить свежую выписку из Raiffeisen API\n"
             "/status — состояние базы данных\n"
             "/help — эта справка\n\n"
             "Вечерний отчёт — в 16:30 МСК (за сегодня)\nУтренний отчёт — в 8:00 МСК (итоги вчера) 🕗"
