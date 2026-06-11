@@ -108,11 +108,11 @@ def _short_contractor(name: str) -> str:
     if re.match(r"^ип\s", name, re.IGNORECASE):
         parts = name.split()
         return parts[1] if len(parts) > 1 else name
-    # Физлицо ЗАГЛАВНЫМИ — берём первое слово (фамилия)
-    if name.isupper() and " " in name:
+    # Физлицо ЗАГЛАВНЫМИ (не ООО/ЗАО/АО/ПАО) — берём первое слово (фамилия)
+    if name.isupper() and " " in name and not re.match(r"^(ооо|зао|ао|пао|ип)\b", name, re.IGNORECASE):
         return name.split()[0].capitalize()
-    # ООО/ЗАО/АО/ПАО — обрезаем до 35 символов
-    return name[:35] + ("…" if len(name) > 35 else "")
+    # ООО/ЗАО/АО/ПАО и всё остальное — полное название, обрезаем до 40 символов
+    return name[:40] + ("…" if len(name) > 40 else "")
 
 
 def _get_balance() -> str | None:
