@@ -50,6 +50,20 @@ CAT_TO_PLAN_KEY = {
 }
 
 
+
+def _short_contractor(c: str) -> str:
+    """Форматирует имя контрагента для отчёта."""
+    c = c.strip()
+    # Если строка — только цифры (ИНН/КПП) — показываем как есть с пометкой
+    if c.replace(" ", "").isdigit():
+        return f"ИНН {c}"
+    # Для ИП берём фамилию (последнее слово)
+    if c.lower().startswith("ип "):
+        return c.split()[-1]
+    # Остальные — обрезаем до 45 символов
+    return c[:45] + ("…" if len(c) > 45 else "")
+
+
 def _tg_send(text: str) -> bool:
     if not TG_TOKEN or not TG_CHAT_ID:
         log.warning("TG_TOKEN или TG_CHAT_ID не заданы")
@@ -254,7 +268,7 @@ def build_evening_report(target_date: str | None = None) -> str:
                 lines.append("       кому:")
                 for c, v in sorted(contrs.items(), key=lambda x: -x[1]):
                     # Короткое имя: последнее значимое слово для ИП
-                    short_c = c.split()[-1] if c.startswith("ИП") or c.startswith("ип") else c[:40]
+                    short_c = _short_contractor(c)
                     lines.append(f"       · {short_c} {_fmt(v)}")
 
     return "\n".join(lines)
@@ -336,7 +350,7 @@ def build_morning_report(target_date: str | None = None) -> str:
             contrs = cat_contrs.get(cat, {})
             if len(contrs) > 1 or cat in ("Лес", "Перевозка леса", "Смола", "Плёнка"):
                 for c, v in sorted(contrs.items(), key=lambda x: -x[1]):
-                    short_c = c.split()[-1] if c.startswith("ИП") or c.startswith("ип") else c[:40]
+                    short_c = _short_contractor(c)
                     lines.append(f"    · {short_c} {_fmt(v)}")
 
     return "\n".join(lines)
