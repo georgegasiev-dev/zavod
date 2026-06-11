@@ -281,10 +281,19 @@ async def tg_webhook(request: Request):
     cmd = text.lower().split()[0] if text else ""
 
     if cmd in ("/report", "отчёт", "отчет", "report"):
-        await reply("⏳ Формирую отчёт...")
+        await reply("⏳ Формирую вечерний отчёт...")
         try:
             from telegram_reporter import build_evening_report
             report_text = build_evening_report(target_date="today")
+            await reply(report_text)
+        except Exception as e:
+            await reply(f"❌ Ошибка: {e}")
+
+    elif cmd in ("/утро", "утро", "morning"):
+        await reply("⏳ Формирую утренний отчёт...")
+        try:
+            from telegram_reporter import build_morning_report
+            report_text = build_morning_report()
             await reply(report_text)
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
@@ -322,6 +331,8 @@ async def tg_webhook(request: Request):
             "👋 <b>Новатор · Отчётный бот</b>\n\n"
             "Доступные команды:\n\n"
             "/report — отчёт о движении за сегодня\n"
+            "/утро — утренний отчёт (итоги вчера)\n"
+            "/утро — утренний отчёт (итоги вчера)\n"
             "/sync — загрузить свежую выписку из Gmail\n"
             "/status — состояние базы данных\n"
             "/help — эта справка\n\n"
