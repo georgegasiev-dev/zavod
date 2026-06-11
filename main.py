@@ -16,7 +16,8 @@ from classifier import classify_operations
 from database import (save_month_data, merge_month_data, get_month_data, get_all_months,
                        get_last_upload, save_contractor_mapping, save_contractor_comment,
                        save_plan, get_plan, get_all_plans,
-                       add_allowed_user, get_allowed_users, remove_allowed_user)
+                       add_allowed_user, get_allowed_users, remove_allowed_user,
+                       log_access, get_access_log)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -140,8 +141,29 @@ def verify_admin(creds: HTTPBasicCredentials = Depends(security)):
     return creds.username
 
 # ── публичные эндпоинты ───────────────────────────────────────────────────────
+
+def _notify_owner(text: str):
+    """Отправляет уведомление владельцу в Telegram (не блокирует)."""
+    import threading, urllib.request, json as _json
+    tg_token  = os.getenv("TG_TOKEN", "")
+    owner_cid = os.getenv("TG_CHAT_ID", "")
+    if not tg_token or not owner_cid:
+        return
+    def _send():
+        try:
+            url  = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+            data = _json.dumps({"chat_id": owner_cid, "text": text, "parse_mode": "HTML"}).encode()
+            req  = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=8)
+        except Exception:
+            pass
+    threading.Thread(target=_send, daemon=True).start()
+
+
 @app.get("/api/data")
-def get_data(month: str = None):
+def get_data(month: str = None, request: Request = None):
+    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "—") if request else "—"
+    log_access("view_data", ip, f"Месяц: {month or 'все'}")
     if month:
         return get_month_data(month)
     return get_all_months()
@@ -201,6 +223,24 @@ CAT_TO_PLAN_KEY = {
     "Прочие нераспознанные":  "prochie",
     "Поступления от клиентов":"prikhod",
 }
+
+
+
+@app.get("/api/access-log")
+def get_access_log_endpoint(limit: int = 50, _: str = Depends(verify_admin)):
+    """История доступа к системе."""
+    rows = get_access_log(limit)
+    # Конвертируем UTC → МСК для отображения
+    from datetime import timezone
+    result = []
+    for r in rows:
+        try:
+            dt = datetime.fromisoformat(r["created_at"]) + timedelta(hours=3)
+            r["created_at_msk"] = dt.strftime("%d.%m.%Y %H:%M МСК")
+        except Exception:
+            r["created_at_msk"] = r["created_at"]
+        result.append(r)
+    return result
 
 
 @app.get("/api/plan")
