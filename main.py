@@ -138,15 +138,20 @@ def verify_admin(creds: HTTPBasicCredentials = Depends(security), request: Reque
     if not ok:
         ip = request.headers.get("x-forwarded-for", request.client.host if request and request.client else "—")
         log_access("login_failed", ip, f"Пользователь: {creds.username}")
-        _notify_owner(f"⚠️ <b>Неудачная попытка входа</b>\nПользователь: {creds.username}\nIP: {ip}")
+        _notify_login(f"⚠️ <b>Неудачная попытка входа</b>\nПользователь: {creds.username}\nIP: {ip}", ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             headers={"WWW-Authenticate": "Basic"})
     ip = request.headers.get("x-forwarded-for", request.client.host if request and request.client else "—") if request else "—"
     log_access("login_ok", ip, f"Пользователь: {creds.username}")
-    _notify_owner(f"🔑 <b>Вход в систему</b>\nПользователь: {creds.username}\nIP: {ip}")
+    _notify_login(f"🔑 <b>Вход в систему</b>\nПользователь: {creds.username}\nIP: {ip}", ip)
     return creds.username
 
 # ── публичные эндпоинты ───────────────────────────────────────────────────────
+
+# Кэш для дедупликации уведомлений о входе: {ip: последнее_время}
+_login_notify_cache: dict[str, datetime] = {}
+_LOGIN_DEDUP_SECONDS = 300  # 5 минут
+
 
 def _notify_owner(text: str):
     """Отправляет уведомление владельцу в Telegram (не блокирует)."""
@@ -164,6 +169,16 @@ def _notify_owner(text: str):
         except Exception:
             pass
     threading.Thread(target=_send, daemon=True).start()
+
+
+def _notify_login(text: str, ip: str):
+    """Уведомление о входе с дедупликацией: одно сообщение на IP раз в 5 минут."""
+    now = datetime.now()
+    last = _login_notify_cache.get(ip)
+    if last and (now - last).total_seconds() < _LOGIN_DEDUP_SECONDS:
+        return
+    _login_notify_cache[ip] = now
+    _notify_owner(text)
 
 
 @app.get("/api/data")
