@@ -265,9 +265,19 @@ async def tg_webhook(request: Request):
     chat_id = str(msg.get("chat", {}).get("id", ""))
     text    = (msg.get("text") or "").strip()
 
+    async def reply(txt: str):
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{tg_token}/sendMessage",
+                    json={"chat_id": chat_id, "text": txt, "parse_mode": "HTML"}
+                )
+        except Exception as e:
+            log.error("Ошибка ответа в Telegram: %s", e)
+
     # Владелец всегда имеет доступ, остальные — через пароль
     bot_password = os.getenv("TG_BOT_PASSWORD", "")
-    allowed_ids  = get_allowed_users()        # из БД
+    allowed_ids  = get_allowed_users()
     owner_id     = tg_chat
     is_allowed   = chat_id == owner_id or chat_id in allowed_ids
 
@@ -275,7 +285,7 @@ async def tg_webhook(request: Request):
     if text.lower().startswith("/start"):
         parts    = text.split(maxsplit=1)
         password = parts[1].strip() if len(parts) > 1 else ""
-        if chat_id == owner_id or chat_id in allowed_ids:
+        if is_allowed:
             await reply("✅ У вас уже есть доступ. Напишите /help.")
             return {"ok": True}
         if bot_password and password == bot_password:
@@ -288,16 +298,6 @@ async def tg_webhook(request: Request):
     if not is_allowed:
         await reply("🔒 Введите /start ПАРОЛЬ для получения доступа.")
         return {"ok": True}
-
-    async def reply(txt: str):
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                await client.post(
-                    f"https://api.telegram.org/bot{tg_token}/sendMessage",
-                    json={"chat_id": chat_id, "text": txt, "parse_mode": "HTML"}
-                )
-        except Exception as e:
-            log.error("Ошибка ответа в Telegram: %s", e)
 
     cmd = text.lower().split()[0] if text else ""
 
