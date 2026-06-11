@@ -14,7 +14,8 @@ import pandas as pd, io, json, secrets, os, logging
 from datetime import datetime
 from classifier import classify_operations
 from database import (save_month_data, merge_month_data, get_month_data, get_all_months,
-                       get_last_upload, save_contractor_mapping, save_contractor_comment)
+                       get_last_upload, save_contractor_mapping, save_contractor_comment,
+                       save_plan, get_plan, get_all_plans)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -45,14 +46,25 @@ async def scheduled_gmail_sync():
             log.error("Ошибка Gmail sync: %s", e)
 
 async def scheduled_tg_report():
-    """Отправляет еженедельный отчёт в Telegram."""
-    log.info("📨 Отправка отчёта в Telegram...")
+    """Утренний отчёт (8:00) — итоги вчерашнего дня."""
+    log.info("📨 Утренний отчёт в Telegram...")
     try:
-        from telegram_reporter import send_weekly_report
-        result = send_weekly_report()
-        log.info("Telegram report: %s", result)
+        from telegram_reporter import send_morning_report
+        result = send_morning_report()
+        log.info("Telegram morning report: %s", result)
     except Exception as e:
-        log.error("Ошибка отправки отчёта: %s", e)
+        log.error("Ошибка утреннего отчёта: %s", e)
+
+
+async def scheduled_tg_evening_report():
+    """Вечерний отчёт (16:30) — итоги текущего дня."""
+    log.info("📨 Вечерний отчёт в Telegram...")
+    try:
+        from telegram_reporter import send_evening_report
+        result = send_evening_report()
+        log.info("Telegram evening report: %s", result)
+    except Exception as e:
+        log.error("Ошибка вечернего отчёта: %s", e)
 
 async def _register_tg_webhook():
     """Регистрирует webhook в Telegram при старте."""
@@ -91,6 +103,11 @@ async def lifespan(app: FastAPI):
                       id="gmail_sync", replace_existing=True)
     scheduler.add_job(scheduled_tg_report, CronTrigger(hour=REPORT_HOUR, minute=REPORT_MINUTE),
                       id="tg_report", replace_existing=True)
+    # Вечерний отчёт за текущий день (16:30 МСК)
+    EVENING_HOUR   = int(os.getenv("EVENING_HOUR",   "16"))
+    EVENING_MINUTE = int(os.getenv("EVENING_MINUTE", "30"))
+    scheduler.add_job(scheduled_tg_evening_report, CronTrigger(hour=EVENING_HOUR, minute=EVENING_MINUTE),
+                      id="tg_evening_report", replace_existing=True)
     scheduler.start()
     log.info("Scheduler started. Gmail sync %02d:%02d, TG report %02d:%02d МСК.",
              SYNC_HOUR, SYNC_MINUTE, REPORT_HOUR, REPORT_MINUTE)
@@ -128,6 +145,90 @@ def get_data(month: str = None):
         return get_month_data(month)
     return get_all_months()
 
+
+
+# ── план ─────────────────────────────────────────────────────────────────────
+
+# Дефолтный план (Июнь 2026) — совпадает с STD во фронтенде
+DEFAULT_PLAN = {
+    "les":         [5000000,5000000,5000000,5000000,5000000],
+    "dolg_les":    [0,0,0,0,0],
+    "perev_les":   [250000,250000,250000,250000,250000],
+    "smola":       [1000000,2400000,1200000,1200000,1200000],
+    "plenka":      [0,2500000,0,0,3500000],
+    "gsm":         [250000,250000,250000,250000,250000],
+    "rashod":      [200000,200000,200000,200000,200000],
+    "svet":        [350000,350000,350000,500000,350000],
+    "vuvozmys":    [0,0,140000,0,140000],
+    "nds":         [0,0,0,0,0],
+    "ndfl":        [0,0,0,0,0],
+    "upakovka":    [0,0,0,0,0],
+    "perevozch":   [0,0,0,0,0],
+    "zp_avans":    [0,5600000,1000000,0,1000000],
+    "zp_ofic":     [0,0,0,0,0],
+    "zp_bolnich":  [100000,0,100000,0,100000],
+    "zp_shpon":    [931500,1150000,0,0,0],
+    "zp_av_shpon": [0,0,0,0,0],
+    "adm":         [0,0,0,0,0],
+    "arenda":      [50000,50000,50000,50000,50000],
+    "prochie":     [0,0,0,0,0],
+    "prikhod":     [11820000,11820000,11820000,11820000,11820000],
+    "proizvod":    [0,0,0,0,0],
+}
+
+# Маппинг: название категории в ops → ключ в плане
+CAT_TO_PLAN_KEY = {
+    "Лес":                    "les",
+    "Долг лес":               "dolg_les",
+    "Перевозка леса":         "perev_les",
+    "Смола":                  "smola",
+    "Плёнка":                 "plenka",
+    "ГСМ":                    "gsm",
+    "Расходники":             "rashod",
+    "Электроэнергия":         "svet",
+    "Вывоз мусора":           "vuvozmys",
+    "НДС":                    "nds",
+    "НДФЛ":                   "ndfl",
+    "Упаковка":               "upakovka",
+    "Перевозчики":            "perevozch",
+    "ЗП аванс":               "zp_avans",
+    "ЗП официальная":         "zp_ofic",
+    "Больничные":             "zp_bolnich",
+    "ЗП":                     "zp_avans",
+    "Аренда помещений":       "arenda",
+    "Административные":       "adm",
+    "Прочие нераспознанные":  "prochie",
+    "Поступления от клиентов":"prikhod",
+}
+
+
+@app.get("/api/plan")
+def get_plan_endpoint(month: str = "Июнь"):
+    """Возвращает план для месяца. Если не задан — дефолтный."""
+    plan = get_plan(month)
+    if not plan:
+        plan = DEFAULT_PLAN
+    return {"month": month, "plan": plan}
+
+
+@app.get("/api/plan/all")
+def get_all_plans_endpoint():
+    """Возвращает планы по всем месяцам."""
+    return get_all_plans()
+
+
+@app.post("/api/plan")
+async def save_plan_endpoint(request: Request):
+    """Сохраняет план для месяца. Body: {month, plan: {...}}"""
+    body = await request.json()
+    month = body.get("month", "Июнь")
+    plan  = body.get("plan", {})
+    if not plan:
+        return {"error": "plan is empty"}
+    save_plan(month, plan)
+    return {"status": "ok", "month": month, "keys": list(plan.keys())}
+
+
 @app.get("/api/status")
 def get_status():
     return get_last_upload()
@@ -140,8 +241,8 @@ def health():
 async def manual_report(_: str = Depends(verify_admin)):
     """Ручная отправка отчёта в Telegram — для теста."""
     try:
-        from telegram_reporter import send_weekly_report
-        result = send_weekly_report()
+        from telegram_reporter import send_evening_report
+        result = send_evening_report()
         return {"status": "ok", **result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -182,8 +283,8 @@ async def tg_webhook(request: Request):
     if cmd in ("/report", "отчёт", "отчет", "report"):
         await reply("⏳ Формирую отчёт...")
         try:
-            from telegram_reporter import build_daily_report
-            report_text = build_daily_report(target_date="today")
+            from telegram_reporter import build_evening_report
+            report_text = build_evening_report(target_date="today")
             await reply(report_text)
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
@@ -220,11 +321,11 @@ async def tg_webhook(request: Request):
         await reply(
             "👋 <b>Новатор · Отчётный бот</b>\n\n"
             "Доступные команды:\n\n"
-            "/report — отчёт за сегодня\n"
+            "/report — отчёт о движении за сегодня\n"
             "/sync — загрузить свежую выписку из Gmail\n"
             "/status — состояние базы данных\n"
             "/help — эта справка\n\n"
-            "Автоотчёт приходит каждое утро в 8:00 МСК за предыдущий день 🕗"
+            "Вечерний отчёт — в 16:30 МСК (за сегодня)\nУтренний отчёт — в 8:00 МСК (итоги вчера) 🕗"
         )
     else:
         await reply(
