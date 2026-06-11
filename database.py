@@ -208,3 +208,45 @@ def merge_month_data(month: str, new_data: dict):
     }
 
     save_month_data(month, merged)
+
+
+
+# ── План ──────────────────────────────────────────────────────────────────────
+
+def save_plan(month: str, plan: dict):
+    """Сохраняет план по категориям для месяца."""
+    with _conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS plan (
+                month      TEXT PRIMARY KEY,
+                data       TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO plan (month, data, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(month) DO UPDATE
+            SET data=excluded.data, updated_at=excluded.updated_at
+        """, (month, json.dumps(plan, ensure_ascii=False), datetime.now().isoformat()))
+        conn.commit()
+
+
+def get_plan(month: str) -> dict:
+    """Возвращает план для месяца или {} если не задан."""
+    with _conn() as conn:
+        try:
+            row = conn.execute("SELECT data FROM plan WHERE month=?", (month,)).fetchone()
+            return json.loads(row['data']) if row else {}
+        except Exception:
+            return {}
+
+
+def get_all_plans() -> dict:
+    """Возвращает планы по всем месяцам."""
+    with _conn() as conn:
+        try:
+            rows = conn.execute("SELECT month, data, updated_at FROM plan").fetchall()
+            return {r['month']: {**json.loads(r['data']), 'updated_at': r['updated_at']} for r in rows}
+        except Exception:
+            return {}
