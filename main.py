@@ -264,8 +264,12 @@ async def tg_webhook(request: Request):
     chat_id = str(msg.get("chat", {}).get("id", ""))
     text    = (msg.get("text") or "").strip()
 
-    # Отвечаем только владельцу
-    if chat_id != tg_chat:
+    # Список разрешённых chat_id (владелец + коллеги)
+    allowed_ids_str = os.getenv("TG_ALLOWED_IDS", tg_chat)
+    allowed_ids = [x.strip() for x in allowed_ids_str.split(",")]
+
+    if chat_id not in allowed_ids:
+        log.info("Неизвестный chat_id %s написал: %s", chat_id, text)
         return {"ok": True}
 
     async def reply(txt: str):
