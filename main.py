@@ -303,14 +303,23 @@ async def tg_webhook(request: Request):
         try:
             from raiffeisen_api import fetch_and_load
             result = fetch_and_load()
-            status = result.get("status", "")
-            ops    = result.get("ops_loaded", result.get("ops", 0))
-            month  = result.get("month", "")
-            if status == "ok":
-                await reply(f"✅ Выписка загружена: {ops} операций ({month})")
-            else:
-                reason = result.get("reason", result.get("error", str(result)))
-                await reply(f"⚠️ {reason}")
+            # Формируем читаемое сообщение
+            ops      = result.get("ops_saved", result.get("ops_loaded", result.get("ops", 0)))
+            months   = result.get("months", [])
+            months_s = ", ".join(months) if months else "—"
+            rec      = result.get("reconciliation", {})
+            balance  = rec.get("closing_balance")
+            ok_rec   = rec.get("ok", True)
+
+            msg = f"✅ Выписка загружена\n"
+            msg += f"Операций: {ops}\n"
+            msg += f"Месяц(ы): {months_s}\n"
+            if balance is not None:
+                b_fmt = f"{int(round(balance)):,}".replace(",", "\u00a0")
+                msg += f"Баланс на конец: {b_fmt} ₽"
+                if not ok_rec:
+                    msg += " ⚠️ расхождение в выписке"
+            await reply(msg)
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
