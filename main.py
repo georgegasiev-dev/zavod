@@ -401,16 +401,16 @@ async def tg_webhook(request: Request):
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
-    elif cmd in ("/найти", "/find", "/поиск") or text.lower().startswith("/найти ") or text.lower().startswith("/find "):
+    elif cmd in ("/find", "/найти", "/поиск") or text.lower().startswith("/find ") or text.lower().startswith("/найти "):
         # Извлекаем поисковый запрос
         parts   = text.split(maxsplit=1)
         query   = parts[1].strip() if len(parts) > 1 else ""
         if not query:
-            await reply("Напиши что искать. Например:\n/найти аренда\n/найти Нестеров\n/найти 1586000")
+            await reply("Напиши что искать. Например:\n/find аренда\n/find Нестеров\n/find 1586000")
         else:
             await reply(f"🔍 Ищу «{query}»...")
             try:
-                from database import get_all_months, get_month_data
+                from database import get_all_months
                 from telegram_reporter import _clean_name, _fmt
                 import re
 
@@ -418,10 +418,9 @@ async def tg_webhook(request: Request):
                 results = []
 
                 # Ищем по всем месяцам
-                months = get_all_months()
-                for month_info in months:
-                    month = month_info.get("month") or month_info.get("name", "")
-                    data  = get_month_data(month)
+                # get_all_months() возвращает dict {месяц: {ops: [...], ...}}
+                months_data = get_all_months()
+                for month, data in months_data.items():
                     if not data or not data.get("ops"):
                         continue
                     for op in data.get("ops", []):
@@ -531,14 +530,13 @@ async def tg_webhook(request: Request):
             "👋 <b>Новатор · Отчётный бот</b>\n\n"
             "<b>Команды:</b>\n"
             "/report — вечерний отчёт за сегодня\n"
-            "/найти [запрос] — поиск по операциям\n"
-            "\nИли просто пиши свободным текстом — я пойму 🤖\n"
             "/morning — утренний отчёт (итоги вчерашнего дня)\n"
             "/week — отчёт за прошлую неделю\n"
-            "/morning — утренний отчёт (итоги вчерашнего дня)\n"
+            "/find [запрос] — поиск по операциям\n"
             "/sync — загрузить выписку из Raiffeisen\n"
             "/status — состояние базы данных\n"
             "/help — эта справка\n\n"
+            "Или просто пиши свободным текстом — я пойму 🤖\n\n"
             "🕔 Вечерний отчёт — в 16:30 МСК\n"
             "🕗 Утренний отчёт — в 8:00 МСК"
         )
