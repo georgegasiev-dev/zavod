@@ -103,8 +103,8 @@ def _clean_name(name: str) -> str:
     # Нормализуем юридические формы (регистронезависимо)
     for pattern, abbr in _LEGAL_FORMS:
         name = re.sub(pattern, abbr, name, flags=re.IGNORECASE)
-    # Убираем ', ИНН: ...' и ' ИНН ...'
-    name = re.sub(r",?\s*ИНН[:\s]+\d{10,12}", "", name, flags=re.IGNORECASE)
+    # Убираем ', ИНН: ...' и ' ИНН ...' и ' ИНН —' (с тире вместо цифр)
+    name = re.sub(r",?\s*ИНН[:\s\—\-]*\d*", "", name, flags=re.IGNORECASE)
     # Убираем 'р/с ...' или 'p/c ...' и всё после
     name = re.sub(r"\s+[рpрp]/[сc]\s+\S+.*", "", name, flags=re.IGNORECASE)
     # Убираем лишние пробелы и запятые в конце
