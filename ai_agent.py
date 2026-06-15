@@ -120,13 +120,12 @@ SYSTEM_PROMPT = """Ты финансовый ассистент компании
 
 def _get_all_ops() -> list:
     """Возвращает все операции из всех месяцев."""
-    from database import get_all_months, get_month_data
+    from database import get_all_months
     all_ops = []
     try:
-        months = get_all_months()
-        for m in months:
-            month = m.get("month") or m.get("name", "")
-            data  = get_month_data(month)
+        # get_all_months() возвращает dict {месяц: {ops: [...], ...}}
+        months_data = get_all_months()
+        for month, data in months_data.items():
             if data and data.get("ops"):
                 for op in data["ops"]:
                     op["_month"] = month
