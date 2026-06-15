@@ -11,13 +11,14 @@ from fastapi.responses import JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pandas as pd, io, json, secrets, os, logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from classifier import classify_operations
 from database import (save_month_data, merge_month_data, get_month_data, get_all_months,
                        get_last_upload, save_contractor_mapping, save_contractor_comment,
                        save_plan, get_plan, get_all_plans,
                        add_allowed_user, get_allowed_users, remove_allowed_user,
-                       log_access, get_access_log, DB_PATH)
+                       log_access, get_access_log,
+                       save_week_balance, get_week_balance)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -58,6 +59,17 @@ async def scheduled_tg_report():
         log.error("Ошибка утреннего отчёта: %s", e)
 
 
+async def scheduled_tg_weekly_summary():
+    """Еженедельный отчёт (пн 7:45) — итоги прошлой недели."""
+    log.info("📨 Еженедельный отчёт в Telegram...")
+    try:
+        from telegram_reporter import send_weekly_summary_report
+        result = send_weekly_summary_report()
+        log.info("Telegram weekly summary: %s", result)
+    except Exception as e:
+        log.error("Ошибка еженедельного отчёта: %s", e)
+
+
 async def scheduled_tg_evening_report():
     """Вечерний отчёт (16:30) — итоги текущего дня."""
     log.info("📨 Вечерний отчёт в Telegram...")
@@ -67,26 +79,6 @@ async def scheduled_tg_evening_report():
         log.info("Telegram evening report: %s", result)
     except Exception as e:
         log.error("Ошибка вечернего отчёта: %s", e)
-
-async def scheduled_backup():
-    """Ежедневный бэкап БД (3:00 МСК)."""
-    log.info("💾 Запуск ежедневного бэкапа...")
-    try:
-        import shutil as _shutil
-        os.makedirs(os.getenv("BACKUP_DIR", "data/backups"), exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        bd = os.getenv("BACKUP_DIR", "data/backups")
-        dst = os.path.join(bd, f"novator_{ts}.db")
-        db_path = os.getenv("DB_PATH", "data/novator.db")
-        _shutil.copy2(db_path, dst)
-        # Ротация
-        keep = int(os.getenv("BACKUP_KEEP", "7"))
-        backups = sorted([f for f in os.listdir(bd) if f.endswith(".db")], reverse=True)
-        for old in backups[keep:]:
-            os.remove(os.path.join(bd, old))
-        log.info("💾 Бэкап готов: %s (всего: %d)", dst, min(len(backups), keep))
-    except Exception as e:
-        log.error("Ошибка бэкапа: %s", e)
 
 async def _register_tg_webhook():
     """Регистрирует webhook в Telegram при старте."""
@@ -130,9 +122,9 @@ async def lifespan(app: FastAPI):
     EVENING_MINUTE = int(os.getenv("EVENING_MINUTE", "30"))
     scheduler.add_job(scheduled_tg_evening_report, CronTrigger(hour=EVENING_HOUR, minute=EVENING_MINUTE),
                       id="tg_evening_report", replace_existing=True)
-    # Ежедневный бэкап БД в 3:00 МСК
-    scheduler.add_job(scheduled_backup, CronTrigger(hour=3, minute=0),
-                      id="db_backup", replace_existing=True)
+    # Еженедельный отчёт — каждый понедельник в 7:45 МСК
+    scheduler.add_job(scheduled_tg_weekly_summary, CronTrigger(day_of_week="mon", hour=7, minute=45),
+                      id="tg_weekly_summary", replace_existing=True)
     scheduler.start()
     log.info("Scheduler started. Gmail sync %02d:%02d, TG report %02d:%02d МСК.",
              SYNC_HOUR, SYNC_MINUTE, REPORT_HOUR, REPORT_MINUTE)
@@ -143,29 +135,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Новатор — Платёжный мониторинг", version="1.0.0", lifespan=lifespan)
 security = HTTPBasic()
 
-# CORS — только фронтенд Новатора
-ALLOWED_ORIGINS = os.getenv("CORS_ORIGINS", "https://novator-frontend.vercel.app").split(",")
+# CORS — разрешаем все источники явно
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*", "X-API-Key"],
+    allow_headers=["*"],
 )
 
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "novator2026")
-API_KEY    = os.getenv("API_KEY", "")  # обязательно задать в Railway!
-
-def verify_api_key(request: Request):
-    """Проверка API-ключа для публичных эндпоинтов с данными."""
-    if not API_KEY:
-        return  # если ключ не задан — пропускаем (для локальной разработки)
-    key = request.headers.get("X-API-Key") or request.query_params.get("api_key") or ""
-    if not secrets.compare_digest(key.encode(), API_KEY.encode()):
-        ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "—")
-        log_access("api_key_rejected", ip, f"Path: {request.url.path}")
-        raise HTTPException(status_code=403, detail="Invalid API key")
 
 def verify_admin(creds: HTTPBasicCredentials = Depends(security), request: Request = None):
     ok = (secrets.compare_digest(creds.username.encode(), ADMIN_USER.encode()) and
@@ -217,7 +197,7 @@ def _notify_login(text: str, ip: str):
 
 
 @app.get("/api/data")
-def get_data(month: str = None, request: Request = None, _: None = Depends(verify_api_key)):
+def get_data(month: str = None, request: Request = None):
     ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "—") if request else "—"
     log_access("view_data", ip, f"Месяц: {month or 'все'}")
     if month:
@@ -300,7 +280,7 @@ def get_access_log_endpoint(limit: int = 50, _: str = Depends(verify_admin)):
 
 
 @app.get("/api/plan")
-def get_plan_endpoint(month: str = "Июнь", _: None = Depends(verify_api_key)):
+def get_plan_endpoint(month: str = "Июнь"):
     """Возвращает план для месяца. Если не задан — дефолтный."""
     plan = get_plan(month)
     if not plan:
@@ -309,7 +289,7 @@ def get_plan_endpoint(month: str = "Июнь", _: None = Depends(verify_api_key)
 
 
 @app.get("/api/plan/all")
-def get_all_plans_endpoint(_: None = Depends(verify_api_key)):
+def get_all_plans_endpoint():
     """Возвращает планы по всем месяцам."""
     return get_all_plans()
 
@@ -406,6 +386,15 @@ async def tg_webhook(request: Request):
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
+    elif cmd in ("/week", "/неделя", "неделя"):
+        await reply("⏳ Формирую недельный отчёт...")
+        try:
+            from telegram_reporter import build_weekly_summary_report
+            report_text = build_weekly_summary_report()
+            await reply(report_text)
+        except Exception as e:
+            await reply(f"❌ Ошибка: {e}")
+
     elif cmd in ("/morning", "/утро", "утро", "morning"):
         await reply("⏳ Формирую утренний отчёт...")
         try:
@@ -465,6 +454,8 @@ async def tg_webhook(request: Request):
             "<b>Команды:</b>\n"
             "/report — вечерний отчёт за сегодня\n"
             "/morning — утренний отчёт (итоги вчерашнего дня)\n"
+            "/week — отчёт за прошлую неделю\n"
+            "/morning — утренний отчёт (итоги вчерашнего дня)\n"
             "/sync — загрузить выписку из Raiffeisen\n"
             "/status — состояние базы данных\n"
             "/help — эта справка\n\n"
@@ -503,60 +494,6 @@ def sync_status(_: str = Depends(verify_admin)):
 def root():
     return {"service": "Новатор Платёжный мониторинг", "status": "ok",
             "docs": "/docs", "health": "/api/health"}
-
-# ── резервное копирование БД ──────────────────────────────────────────────────
-import shutil
-from datetime import timedelta
-
-BACKUP_DIR = os.getenv("BACKUP_DIR", "data/backups")
-BACKUP_KEEP = int(os.getenv("BACKUP_KEEP", "7"))  # хранить N копий
-
-def _run_backup():
-    """Создаёт резервную копию SQLite-базы."""
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dst = os.path.join(BACKUP_DIR, f"novator_{ts}.db")
-    try:
-        shutil.copy2(DB_PATH, dst)
-        log.info("💾 Бэкап создан: %s", dst)
-        # Удаляем старые бэкапы (оставляем BACKUP_KEEP последних)
-        backups = sorted(
-            [f for f in os.listdir(BACKUP_DIR) if f.endswith(".db")],
-            reverse=True
-        )
-        for old in backups[BACKUP_KEEP:]:
-            os.remove(os.path.join(BACKUP_DIR, old))
-            log.info("🗑️ Удалён старый бэкап: %s", old)
-        return {"status": "ok", "file": dst, "total_backups": min(len(backups), BACKUP_KEEP)}
-    except Exception as e:
-        log.error("Ошибка бэкапа: %s", e)
-        return {"status": "error", "detail": str(e)}
-
-
-@app.post("/api/backup")
-def manual_backup(_: str = Depends(verify_admin)):
-    """Ручное создание бэкапа."""
-    return _run_backup()
-
-
-@app.get("/api/backup/list")
-def list_backups(_: str = Depends(verify_admin)):
-    """Список бэкапов."""
-    if not os.path.exists(BACKUP_DIR):
-        return {"backups": []}
-    files = sorted(
-        [f for f in os.listdir(BACKUP_DIR) if f.endswith(".db")],
-        reverse=True
-    )
-    result = []
-    for f in files:
-        path = os.path.join(BACKUP_DIR, f)
-        result.append({
-            "name": f,
-            "size_mb": round(os.path.getsize(path) / 1024 / 1024, 2),
-            "created": datetime.fromtimestamp(os.path.getctime(path)).isoformat(),
-        })
-    return {"backups": result}
 
 # ── защищённые эндпоинты ──────────────────────────────────────────────────────
 @app.post("/api/upload")
@@ -705,7 +642,7 @@ async def reclassify_op(
 
 # ── справочник контрагентов ───────────────────────────────────────────────────
 @app.get("/api/contractors")
-def get_contractors(_: None = Depends(verify_api_key)):
+def get_contractors():
     """Полный справочник контрагентов с суммами из ops."""
     from database import get_contractor_mappings, get_all_months
     db_map = get_contractor_mappings()  # {contractor: cat}
@@ -849,7 +786,7 @@ async def raiffeisen_sync_status(job_id: str, _: str = Depends(verify_admin)):
 
 
 @app.get("/api/balance")
-async def get_account_balance(_: None = Depends(verify_api_key)):
+async def get_account_balance():
     """Остаток на счёте после последней синхронизации."""
     from database import get_setting
     balance = get_setting("account_balance")
@@ -1305,10 +1242,7 @@ def _call_tool(name: str, args: dict) -> str:
 
 
 @app.get("/mcp/sse")
-async def mcp_sse(request: Request, token: str = ""):
-    # Проверка API-ключа через query param (SSE не поддерживает заголовки)
-    if API_KEY and not secrets.compare_digest(token.encode(), API_KEY.encode()):
-        raise HTTPException(status_code=403, detail="Invalid MCP token")
+async def mcp_sse(request: Request):
     session_id = str(uuid.uuid4())
     queue: asyncio.Queue = asyncio.Queue()
     SESSIONS[session_id] = queue
@@ -1328,7 +1262,8 @@ async def mcp_sse(request: Request, token: str = ""):
             SESSIONS.pop(session_id, None)
 
     return StreamingResponse(generator(), media_type="text/event-stream",
-                             headers={"Cache-Control":"no-cache","Connection":"keep-alive"})
+                             headers={"Cache-Control":"no-cache","Connection":"keep-alive",
+                                      "Access-Control-Allow-Origin":"*"})
 
 
 @app.post("/mcp/messages/{session_id}")
