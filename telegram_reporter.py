@@ -388,74 +388,78 @@ def send_weekly_report():                  return send_morning_report()
 
 def build_weekly_summary_report() -> str:
     """
-    Полный отчёт за прошлую неделю (пн–пт):
-    - Баланс на утро понедельника
-    - Итого поступлений и расходов за неделю
-    - Детализация клиентов
-    - Детализация расходов по категориям
-    - Баланс на пятницу 18:00
+    Полный отчёт за прошлую неделю (пн–вс, календарная).
     """
     from database import get_month_data, get_week_balance
 
-    # Определяем прошлую неделю (пн–вс, календарная)
+    # Определяем прошлую неделю (пн–вс)
     today    = datetime.now()
-    last_mon = today - timedelta(days=today.weekday() + 7)  # пн прошлой недели
-    last_sun = last_mon + timedelta(days=6)                 # вс прошлой недели
+    last_mon = today - timedelta(days=today.weekday() + 7)
+    last_sun = last_mon + timedelta(days=6)
 
     mon_label = _date_label(last_mon)
     sun_label = _date_label(last_sun)
     mon_iso   = last_mon.strftime("%Y-%m-%d")
 
-    # Определяем месяцы (может быть два если неделя на стыке)
+    # Месяцы которые покрывает неделя
     months_needed = set()
     for i in range(7):
         dt = last_mon + timedelta(days=i)
         months_needed.add(MONTH_NAMES.get(dt.month, ""))
 
-    # Собираем все операции за неделю (пн 00:00 — вс 23:59)
+    # Все операции за неделю — перебираем каждый день явно
     all_credit: list = []
     all_debit:  list = []
+    week_dates = set()
+    for i in range(7):
+        dt = last_mon + timedelta(days=i)
+        week_dates.add(dt.strftime("%d.%m.%Y"))
 
     for month in months_needed:
+        if not month:
+            continue
         data = get_month_data(month)
         if not data or not data.get("ops"):
             continue
         for op in data.get("ops", []):
-            try:
-                op_dt = datetime.strptime(op.get("date", ""), "%d.%m.%Y")
-            except ValueError:
-                continue
-            if last_mon.date() <= op_dt.date() <= last_sun.date():
+            if op.get("date", "") in week_dates:
                 if op.get("is_debit"):
                     all_debit.append(op)
                 else:
                     all_credit.append(op)
 
     if not all_credit and not all_debit:
-        return f"📭 Недельный отчёт за {mon_label}–{sun_label}\n\nОпераций в выписке нет."
+        return f"📭 Итоги прошлой недели {mon_label}–{sun_label}\n\nОпераций в выписке нет."
 
     total_in  = sum(op.get("amount", 0) for op in all_credit)
     total_out = sum(op.get("amount", 0) for op in all_debit)
 
-    # Балансы из БД
-    mon_iso = last_mon.strftime("%Y-%m-%d")
+    # Балансы
     week_bal = get_week_balance(mon_iso)
     opening  = week_bal.get("opening") if week_bal else None
     closing  = week_bal.get("closing") if week_bal else None
+    now_bal  = _get_balance()
 
     # ── Заголовок ────────────────────────────────────────────────────────────
     lines = [
-        f"<b>НОВАТОР · ИТОГИ НЕДЕЛИ</b>",
+        f"<b>НОВАТОР · ИТОГИ ПРОШЛОЙ НЕДЕЛИ</b>",
         f"<b>{mon_label} — {sun_label}</b>",
         "",
     ]
 
+    # Балансы в начале
+    if now_bal:
+        lines.append(f"Баланс на данную минуту: {now_bal}")
     if opening is not None:
-        lines += [f"На счету в начале недели: {_fmt(opening)} ₽", ""]
+        lines.append(f"Баланс на начало прошлой недели: {_fmt(opening)} ₽")
+    if closing is not None:
+        lines.append(f"Баланс на конец прошлой недели: {_fmt(closing)} ₽")
+    lines.append("")
 
+    # Итоги
     lines += [
-        f"Поступлений за неделю — {_fmt(total_in)} ₽",
-        f"Расходов за неделю — {_fmt(total_out)} ₽",
+        f"Поступило за прошлую неделю — {_fmt(total_in)} ₽",
+        f"Расходов за прошлую неделю — {_fmt(total_out)} ₽",
         "",
     ]
 
@@ -484,16 +488,16 @@ def build_weekly_summary_report() -> str:
 
         lines.append("<b>Расходы:</b>")
         for cat, s in sorted(cat_totals.items(), key=lambda x: -x[1]):
-            lines.append(f"  {cat} — {_fmt(s)} руб.")
             contrs = cat_contrs.get(cat, {})
-            if cat in DETAIL_CATS or len(contrs) > 1:
+            has_detail = cat in DETAIL_CATS or len(contrs) > 1
+
+            if has_detail:
+                # Категория с детализацией — выделяем жирным и отделяем пустой строкой
+                lines.append(f"\n<b>  {cat} — {_fmt(s)} руб.</b>")
                 for c, v in sorted(contrs.items(), key=lambda x: -x[1]):
                     lines.append(f"    {_short_contractor(c)} — {_fmt(v)} руб.")
-        lines.append("")
-
-    # ── Баланс на конец пятницы ───────────────────────────────────────────────
-    if closing is not None:
-        lines.append(f"На счету на конец воскресенья — {_fmt(closing)} ₽")
+            else:
+                lines.append(f"  {cat} — {_fmt(s)} руб.")
 
     return "\n".join(lines)
 
