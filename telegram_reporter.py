@@ -80,15 +80,29 @@ def _pct(fact: float, plan: float) -> str | None:
     return f"{fact / plan * 100:.0f}%"
 
 
+# Полные названия → аббревиатуры
+_LEGAL_FORMS = [
+    (r"общество с ограниченной ответственностью", "ООО"),
+    (r"закрытое акционерное общество",            "ЗАО"),
+    (r"открытое акционерное общество",            "ОАО"),
+    (r"публичное акционерное общество",           "ПАО"),
+    (r"акционерное общество",                     "АО"),
+    (r"индивидуальный предприниматель",           "ИП"),
+    (r"общество с дополнительной ответственностью","ОДО"),
+]
+
+
 def _clean_name(name: str) -> str:
     """
-    Убирает мусор из названия контрагента:
-    - ', ИНН: XXXXXXXXXX'
-    - ' ИНН XXXXXXXXXX'
-    - 'p/c XXXXXXXX ...'
-    - лишние пробелы
+    Нормализует название контрагента:
+    - Разворачивает полные юрформы → аббревиатуры
+    - Убирает ', ИНН: XXXXXXXXXX'
+    - Убирает 'р/с XXXXXXXX ...'
     """
     name = name.strip()
+    # Нормализуем юридические формы (регистронезависимо)
+    for pattern, abbr in _LEGAL_FORMS:
+        name = re.sub(pattern, abbr, name, flags=re.IGNORECASE)
     # Убираем ', ИНН: ...' и ' ИНН ...'
     name = re.sub(r",?\s*ИНН[:\s]+\d{10,12}", "", name, flags=re.IGNORECASE)
     # Убираем 'р/с ...' или 'p/c ...' и всё после
@@ -108,11 +122,11 @@ def _short_contractor(name: str) -> str:
     if re.match(r"^ип\s", name, re.IGNORECASE):
         parts = name.split()
         return parts[1] if len(parts) > 1 else name
-    # Физлицо ЗАГЛАВНЫМИ (не ООО/ЗАО/АО/ПАО) — берём первое слово (фамилия)
-    if name.isupper() and " " in name and not re.match(r"^(ооо|зао|ао|пао|ип)\b", name, re.IGNORECASE):
+    # Физлицо ЗАГЛАВНЫМИ (не ООО/ЗАО/АО/ПАО/ИП) — берём первое слово (фамилия)
+    if name.isupper() and " " in name and not re.match(r"^(ооо|зао|оао|пао|ао|ип)\b", name, re.IGNORECASE):
         return name.split()[0].capitalize()
-    # ООО/ЗАО/АО/ПАО и всё остальное — полное название, обрезаем до 40 символов
-    return name[:40] + ("…" if len(name) > 40 else "")
+    # Всё остальное — полное название без обрезки
+    return name
 
 
 def _get_balance() -> str | None:
@@ -192,8 +206,7 @@ def _block_income(credit_ops: list) -> list[str]:
         totals[c] = totals.get(c, 0) + op.get("amount", 0)
     lines.append("<b>Поступления от клиентов:</b>")
     for c, s in sorted(totals.items(), key=lambda x: -x[1]):
-        short = c[:50] + ("…" if len(c) > 50 else "")
-        lines.append(f"  {short} — {_fmt(s)} руб.")
+        lines.append(f"  {c} — {_fmt(s)} руб.")
     lines.append("")
     return lines
 
@@ -384,23 +397,22 @@ def build_weekly_summary_report() -> str:
     """
     from database import get_month_data, get_week_balance
 
-    # Определяем прошлую неделю (пн–пт)
+    # Определяем прошлую неделю (пн–вс, календарная)
     today    = datetime.now()
     last_mon = today - timedelta(days=today.weekday() + 7)  # пн прошлой недели
-    last_fri = last_mon + timedelta(days=4)                 # пт прошлой недели
+    last_sun = last_mon + timedelta(days=6)                 # вс прошлой недели
 
-    mon_str = last_mon.strftime("%d.%m.%Y")
-    fri_str = last_fri.strftime("%d.%m.%Y")
     mon_label = _date_label(last_mon)
-    fri_label = _date_label(last_fri)
+    sun_label = _date_label(last_sun)
+    mon_iso   = last_mon.strftime("%Y-%m-%d")
 
-    # Определяем месяц (может быть два если неделя на стыке)
+    # Определяем месяцы (может быть два если неделя на стыке)
     months_needed = set()
-    for i in range(5):
+    for i in range(7):
         dt = last_mon + timedelta(days=i)
         months_needed.add(MONTH_NAMES.get(dt.month, ""))
 
-    # Собираем все операции за неделю
+    # Собираем все операции за неделю (пн 00:00 — вс 23:59)
     all_credit: list = []
     all_debit:  list = []
 
@@ -413,14 +425,14 @@ def build_weekly_summary_report() -> str:
                 op_dt = datetime.strptime(op.get("date", ""), "%d.%m.%Y")
             except ValueError:
                 continue
-            if last_mon.date() <= op_dt.date() <= last_fri.date():
+            if last_mon.date() <= op_dt.date() <= last_sun.date():
                 if op.get("is_debit"):
                     all_debit.append(op)
                 else:
                     all_credit.append(op)
 
     if not all_credit and not all_debit:
-        return f"📭 Недельный отчёт за {mon_label}–{fri_label}\n\nОпераций в выписке нет."
+        return f"📭 Недельный отчёт за {mon_label}–{sun_label}\n\nОпераций в выписке нет."
 
     total_in  = sum(op.get("amount", 0) for op in all_credit)
     total_out = sum(op.get("amount", 0) for op in all_debit)
@@ -434,7 +446,7 @@ def build_weekly_summary_report() -> str:
     # ── Заголовок ────────────────────────────────────────────────────────────
     lines = [
         f"<b>НОВАТОР · ИТОГИ НЕДЕЛИ</b>",
-        f"<b>{mon_label} — {fri_label}</b>",
+        f"<b>{mon_label} — {sun_label}</b>",
         "",
     ]
 
@@ -455,8 +467,7 @@ def build_weekly_summary_report() -> str:
             client_totals[c] = client_totals.get(c, 0) + op.get("amount", 0)
         lines.append("<b>Поступления от клиентов:</b>")
         for c, s in sorted(client_totals.items(), key=lambda x: -x[1]):
-            short = c[:50] + ("…" if len(c) > 50 else "")
-            lines.append(f"  {short} — {_fmt(s)} руб.")
+            lines.append(f"  {c} — {_fmt(s)} руб.")
         lines.append("")
 
     # ── Расходы по категориям ────────────────────────────────────────────────
@@ -482,7 +493,7 @@ def build_weekly_summary_report() -> str:
 
     # ── Баланс на конец пятницы ───────────────────────────────────────────────
     if closing is not None:
-        lines.append(f"На счету на пятницу 18:00 — {_fmt(closing)} ₽")
+        lines.append(f"На счету на конец воскресенья — {_fmt(closing)} ₽")
 
     return "\n".join(lines)
 
