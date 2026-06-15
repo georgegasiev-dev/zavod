@@ -118,10 +118,11 @@ def _short_contractor(name: str) -> str:
     # Только цифры — ИНН
     if name.replace(" ", "").isdigit():
         return f"ИНН {name}"
-    # ИП — берём фамилию (второе слово)
+    # ИП — сокращаем до "ИП Фамилия"
     if re.match(r"^ип\s", name, re.IGNORECASE):
         parts = name.split()
-        return parts[1] if len(parts) > 1 else name
+        fam = parts[1] if len(parts) > 1 else ""
+        return f"ИП {fam}" if fam else name
     # Физлицо ЗАГЛАВНЫМИ (не ООО/ЗАО/АО/ПАО/ИП) — берём первое слово (фамилия)
     if name.isupper() and " " in name and not re.match(r"^(ооо|зао|оао|пао|ао|ип)\b", name, re.IGNORECASE):
         return name.split()[0].capitalize()
