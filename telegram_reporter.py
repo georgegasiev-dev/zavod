@@ -369,3 +369,131 @@ def build_daily_report(target_date=None):  return build_evening_report(target_da
 def build_weekly_report():                 return build_morning_report()
 def send_daily_report(target_date=None):   return send_evening_report(target_date)
 def send_weekly_report():                  return send_morning_report()
+
+
+# ── Еженедельный отчёт (понедельник 7:45) ────────────────────────────────────
+
+def build_weekly_summary_report() -> str:
+    """
+    Полный отчёт за прошлую неделю (пн–пт):
+    - Баланс на утро понедельника
+    - Итого поступлений и расходов за неделю
+    - Детализация клиентов
+    - Детализация расходов по категориям
+    - Баланс на пятницу 18:00
+    """
+    from database import get_month_data, get_week_balance
+
+    # Определяем прошлую неделю (пн–пт)
+    today    = datetime.now()
+    last_mon = today - timedelta(days=today.weekday() + 7)  # пн прошлой недели
+    last_fri = last_mon + timedelta(days=4)                 # пт прошлой недели
+
+    mon_str = last_mon.strftime("%d.%m.%Y")
+    fri_str = last_fri.strftime("%d.%m.%Y")
+    mon_label = _date_label(last_mon)
+    fri_label = _date_label(last_fri)
+
+    # Определяем месяц (может быть два если неделя на стыке)
+    months_needed = set()
+    for i in range(5):
+        dt = last_mon + timedelta(days=i)
+        months_needed.add(MONTH_NAMES.get(dt.month, ""))
+
+    # Собираем все операции за неделю
+    all_credit: list = []
+    all_debit:  list = []
+
+    for month in months_needed:
+        data = get_month_data(month)
+        if not data or not data.get("ops"):
+            continue
+        for op in data.get("ops", []):
+            try:
+                op_dt = datetime.strptime(op.get("date", ""), "%d.%m.%Y")
+            except ValueError:
+                continue
+            if last_mon.date() <= op_dt.date() <= last_fri.date():
+                if op.get("is_debit"):
+                    all_debit.append(op)
+                else:
+                    all_credit.append(op)
+
+    if not all_credit and not all_debit:
+        return f"📭 Недельный отчёт за {mon_label}–{fri_label}\n\nОпераций в выписке нет."
+
+    total_in  = sum(op.get("amount", 0) for op in all_credit)
+    total_out = sum(op.get("amount", 0) for op in all_debit)
+
+    # Балансы из БД
+    mon_iso = last_mon.strftime("%Y-%m-%d")
+    week_bal = get_week_balance(mon_iso)
+    opening  = week_bal.get("opening") if week_bal else None
+    closing  = week_bal.get("closing") if week_bal else None
+
+    # ── Заголовок ────────────────────────────────────────────────────────────
+    lines = [
+        f"<b>НОВАТОР · ИТОГИ НЕДЕЛИ</b>",
+        f"<b>{mon_label} — {fri_label}</b>",
+        "",
+    ]
+
+    if opening is not None:
+        lines += [f"На счету в начале недели: {_fmt(opening)} ₽", ""]
+
+    lines += [
+        f"Поступлений за неделю — {_fmt(total_in)} ₽",
+        f"Расходов за неделю — {_fmt(total_out)} ₽",
+        "",
+    ]
+
+    # ── Поступления от клиентов ───────────────────────────────────────────────
+    if all_credit:
+        client_totals: dict[str, float] = {}
+        for op in all_credit:
+            c = _clean_name(op.get("contractor", "—"))
+            client_totals[c] = client_totals.get(c, 0) + op.get("amount", 0)
+        lines.append("<b>Поступления от клиентов:</b>")
+        for c, s in sorted(client_totals.items(), key=lambda x: -x[1]):
+            short = c[:50] + ("…" if len(c) > 50 else "")
+            lines.append(f"  {short} — {_fmt(s)} руб.")
+        lines.append("")
+
+    # ── Расходы по категориям ────────────────────────────────────────────────
+    if all_debit:
+        cat_totals: dict[str, float] = {}
+        cat_contrs: dict[str, dict]  = {}
+        for op in all_debit:
+            cat = op.get("cat", "Прочее")
+            amt = op.get("amount", 0)
+            cat_totals[cat] = cat_totals.get(cat, 0) + amt
+            c = op.get("contractor", "—")
+            cat_contrs.setdefault(cat, {})
+            cat_contrs[cat][c] = cat_contrs[cat].get(c, 0) + amt
+
+        lines.append("<b>Расходы:</b>")
+        for cat, s in sorted(cat_totals.items(), key=lambda x: -x[1]):
+            lines.append(f"  {cat} — {_fmt(s)} руб.")
+            contrs = cat_contrs.get(cat, {})
+            if cat in DETAIL_CATS or len(contrs) > 1:
+                for c, v in sorted(contrs.items(), key=lambda x: -x[1]):
+                    lines.append(f"    {_short_contractor(c)} — {_fmt(v)} руб.")
+        lines.append("")
+
+    # ── Баланс на конец пятницы ───────────────────────────────────────────────
+    if closing is not None:
+        lines.append(f"На счету на пятницу 18:00 — {_fmt(closing)} ₽")
+
+    return "\n".join(lines)
+
+
+def send_weekly_summary_report() -> dict:
+    if not TG_TOKEN or not TG_CHAT_ID:
+        return {"status": "skip"}
+    try:
+        text = build_weekly_summary_report()
+        ok   = _tg_send(text)
+        return {"status": "ok" if ok else "error", "length": len(text)}
+    except Exception as e:
+        log.error("send_weekly_summary_report: %s", e)
+        return {"status": "error", "reason": str(e)}
