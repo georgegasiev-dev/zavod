@@ -401,6 +401,69 @@ async def tg_webhook(request: Request):
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
+    elif cmd in ("/найти", "/find", "/поиск") or text.lower().startswith("/найти ") or text.lower().startswith("/find "):
+        # Извлекаем поисковый запрос
+        parts   = text.split(maxsplit=1)
+        query   = parts[1].strip() if len(parts) > 1 else ""
+        if not query:
+            await reply("Напиши что искать. Например:\n/найти аренда\n/найти Нестеров\n/найти 1586000")
+        else:
+            await reply(f"🔍 Ищу «{query}»...")
+            try:
+                from database import get_all_months, get_month_data
+                from telegram_reporter import _clean_name, _fmt
+                import re
+
+                query_l = query.lower()
+                results = []
+
+                # Ищем по всем месяцам
+                months = get_all_months()
+                for month_info in months:
+                    month = month_info.get("month") or month_info.get("name", "")
+                    data  = get_month_data(month)
+                    if not data or not data.get("ops"):
+                        continue
+                    for op in data.get("ops", []):
+                        contractor = _clean_name(op.get("contractor", ""))
+                        cat        = op.get("cat", "")
+                        amount     = op.get("amount", 0)
+                        date       = op.get("date", "")
+                        direction  = "расход" if op.get("is_debit") else "приход"
+
+                        # Ищем по контрагенту, категории или сумме
+                        amount_str = str(int(amount)).replace(" ", "")
+                        query_num  = query_l.replace(" ", "").replace(",", "").replace(".", "")
+                        match = (
+                            query_l in contractor.lower() or
+                            query_l in cat.lower() or
+                            (query_num.isdigit() and query_num in amount_str)
+                        )
+                        if match:
+                            results.append({
+                                "date": date, "contractor": contractor,
+                                "cat": cat, "amount": amount,
+                                "direction": direction, "month": month
+                            })
+
+                if not results:
+                    await reply(f"По запросу «{query}» ничего не найдено.")
+                else:
+                    # Сортируем по дате (новые первые)
+                    results.sort(key=lambda x: x["date"], reverse=True)
+                    lines = [f"<b>Результаты по «{query}»</b> ({len(results)} оп.)\n"]
+                    for r in results[:20]:  # максимум 20
+                        arrow = "↓" if r["direction"] == "расход" else "↑"
+                        lines.append(
+                            f"{r['date']}  {arrow} {_fmt(r['amount'])} руб.\n"
+                            f"  {r['cat']} · {r['contractor']}"
+                        )
+                    if len(results) > 20:
+                        lines.append(f"\n...и ещё {len(results)-20} операций")
+                    await reply("\n".join(lines))
+            except Exception as e:
+                await reply(f"❌ Ошибка поиска: {e}")
+
     elif cmd in ("/week", "/неделя", "неделя"):
         await reply("⏳ Формирую недельный отчёт...")
         try:
@@ -468,6 +531,7 @@ async def tg_webhook(request: Request):
             "👋 <b>Новатор · Отчётный бот</b>\n\n"
             "<b>Команды:</b>\n"
             "/report — вечерний отчёт за сегодня\n"
+            "/найти [запрос] — поиск по операциям\n"
             "/morning — утренний отчёт (итоги вчерашнего дня)\n"
             "/week — отчёт за прошлую неделю\n"
             "/morning — утренний отчёт (итоги вчерашнего дня)\n"
