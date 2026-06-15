@@ -532,6 +532,7 @@ async def tg_webhook(request: Request):
             "<b>Команды:</b>\n"
             "/report — вечерний отчёт за сегодня\n"
             "/найти [запрос] — поиск по операциям\n"
+            "\nИли просто пиши свободным текстом — я пойму 🤖\n"
             "/morning — утренний отчёт (итоги вчерашнего дня)\n"
             "/week — отчёт за прошлую неделю\n"
             "/morning — утренний отчёт (итоги вчерашнего дня)\n"
@@ -542,9 +543,18 @@ async def tg_webhook(request: Request):
             "🕗 Утренний отчёт — в 8:00 МСК"
         )
     else:
-        await reply(
-            "Не понял команду. Напиши /help чтобы увидеть что умею."
-        )
+        # Всё что не команда — отправляем AI-агенту
+        await reply("🤔 Думаю...")
+        try:
+            from ai_agent import ask_agent
+            import asyncio
+            response = await asyncio.get_event_loop().run_in_executor(
+                None, ask_agent, text
+            )
+            await reply(response)
+        except Exception as e:
+            log.error("AI agent error: %s", e)
+            await reply(f"❌ Ошибка агента: {e}")
 
     return {"ok": True}
 
