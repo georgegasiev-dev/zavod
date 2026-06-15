@@ -493,12 +493,14 @@ def build_weekly_summary_report() -> str:
             has_detail = cat in DETAIL_CATS or len(contrs) > 1
 
             if has_detail:
-                # Категория с детализацией — выделяем жирным и отделяем пустой строкой
-                lines.append(f"\n<b>  {cat} — {_fmt(s)} руб.</b>")
+                # Категория с детализацией — выделяем жирным
+                lines.append(f"<b>  {cat} — {_fmt(s)} руб.</b>")
                 for c, v in sorted(contrs.items(), key=lambda x: -x[1]):
                     lines.append(f"    {_short_contractor(c)} — {_fmt(v)} руб.")
+                lines.append("")  # пустая строка после блока
             else:
                 lines.append(f"  {cat} — {_fmt(s)} руб.")
+                lines.append("")  # пустая строка после категории
 
     return "\n".join(lines)
 
