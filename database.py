@@ -331,3 +331,43 @@ def get_access_log(limit: int = 50) -> list[dict]:
             return [dict(r) for r in rows]
         except Exception:
             return []
+
+
+# ── Балансы по неделям ────────────────────────────────────────────────────────
+
+def save_week_balance(date_from: str, opening: float, closing: float):
+    """Сохраняет баланс на начало и конец периода выписки."""
+    with _conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS week_balance (
+                date_from   TEXT PRIMARY KEY,
+                opening     REAL NOT NULL,
+                closing     REAL NOT NULL,
+                updated_at  TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO week_balance (date_from, opening, closing, updated_at)
+            VALUES (?, ?, ?, datetime('now'))
+            ON CONFLICT(date_from) DO UPDATE
+            SET opening=excluded.opening, closing=excluded.closing,
+                updated_at=excluded.updated_at
+        """, (date_from, opening, closing))
+        conn.commit()
+
+
+def get_week_balance(date_from: str) -> dict | None:
+    """Возвращает баланс для периода или None."""
+    with _conn() as conn:
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS week_balance (
+                    date_from TEXT PRIMARY KEY, opening REAL, closing REAL, updated_at TEXT
+                )
+            """)
+            row = conn.execute(
+                "SELECT opening, closing FROM week_balance WHERE date_from=?", (date_from,)
+            ).fetchone()
+            return dict(row) if row else None
+        except Exception:
+            return None
