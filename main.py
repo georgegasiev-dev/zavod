@@ -59,6 +59,18 @@ async def scheduled_tg_report():
         log.error("Ошибка утреннего отчёта: %s", e)
 
 
+async def scheduled_sunday_sync():
+    """Автосинхронизация выписки каждое воскресенье в 23:50 МСК.
+    Нужна чтобы closing_balance совпадал с балансом на конец недели в понедельничном отчёте."""
+    log.info("📥 Воскресная синхронизация выписки Raiffeisen...")
+    try:
+        from raiffeisen_api import fetch_and_load
+        result = fetch_and_load()
+        log.info("Sunday sync result: %s", result)
+    except Exception as e:
+        log.error("Ошибка воскресной синхронизации: %s", e)
+
+
 async def scheduled_tg_weekly_summary():
     """Еженедельный отчёт (пн 7:45) — итоги прошлой недели."""
     log.info("📨 Еженедельный отчёт в Telegram...")
@@ -125,6 +137,9 @@ async def lifespan(app: FastAPI):
     # Еженедельный отчёт — каждый понедельник в 7:45 МСК
     scheduler.add_job(scheduled_tg_weekly_summary, CronTrigger(day_of_week="mon", hour=7, minute=45),
                       id="tg_weekly_summary", replace_existing=True)
+    # Синхронизация выписки в воскресенье 23:50 МСК — для актуального баланса в недельном отчёте
+    scheduler.add_job(scheduled_sunday_sync, CronTrigger(day_of_week="sun", hour=23, minute=50),
+                      id="sunday_sync", replace_existing=True)
     scheduler.start()
     log.info("Scheduler started. Gmail sync %02d:%02d, TG report %02d:%02d МСК.",
              SYNC_HOUR, SYNC_MINUTE, REPORT_HOUR, REPORT_MINUTE)
