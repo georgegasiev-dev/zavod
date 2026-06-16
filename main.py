@@ -50,20 +50,53 @@ async def scheduled_gmail_sync():
         except Exception as e:
             log.error("Ошибка Gmail sync: %s", e)
 
+async def _sync_before_report():
+    """Синхронизирует выписку перед отправкой отчёта."""
+    try:
+        from raiffeisen_api import fetch_and_load, load_token, CLIENT_ID
+        if CLIENT_ID and load_token():
+            log.info("🔄 Синхронизация выписки перед отчётом...")
+            result = fetch_and_load()
+            log.info("Pre-report sync: ops=%s", result.get("ops_saved", "?"))
+    except Exception as e:
+        log.error("Ошибка синхронизации перед отчётом: %s", e)
+
+
 async def scheduled_tg_report():
     """Утренний отчёт (8:00) — итоги вчерашнего дня."""
     log.info("📨 Утренний отчёт в Telegram...")
+    await _sync_before_report()
     try:
-        from telegram_reporter import send_morning_report
-        result = send_morning_report()
-        log.info("Telegram morning report: %s", result)
+        from telegram_reporter import build_morning_report
+        await _broadcast(build_morning_report())
     except Exception as e:
         log.error("Ошибка утреннего отчёта: %s", e)
 
 
+async def scheduled_tg_evening_report():
+    """Вечерний отчёт (16:30) — итоги текущего дня."""
+    log.info("📨 Вечерний отчёт в Telegram...")
+    await _sync_before_report()
+    try:
+        from telegram_reporter import build_evening_report
+        await _broadcast(build_evening_report())
+    except Exception as e:
+        log.error("Ошибка вечернего отчёта: %s", e)
+
+
+async def scheduled_tg_weekly_summary():
+    """Еженедельный отчёт (пн 7:45) — итоги прошлой недели."""
+    log.info("📨 Еженедельный отчёт в Telegram...")
+    await _sync_before_report()
+    try:
+        from telegram_reporter import build_weekly_summary_report
+        await _broadcast(build_weekly_summary_report())
+    except Exception as e:
+        log.error("Ошибка еженедельного отчёта: %s", e)
+
+
 async def scheduled_sunday_sync():
-    """Автосинхронизация выписки каждое воскресенье в 23:50 МСК.
-    Нужна чтобы closing_balance совпадал с балансом на конец недели в понедельничном отчёте."""
+    """Автосинхронизация выписки каждое воскресенье в 23:50 МСК."""
     log.info("📥 Воскресная синхронизация выписки Raiffeisen...")
     try:
         from raiffeisen_api import fetch_and_load
@@ -71,28 +104,6 @@ async def scheduled_sunday_sync():
         log.info("Sunday sync result: %s", result)
     except Exception as e:
         log.error("Ошибка воскресной синхронизации: %s", e)
-
-
-async def scheduled_tg_weekly_summary():
-    """Еженедельный отчёт (пн 7:45) — итоги прошлой недели."""
-    log.info("📨 Еженедельный отчёт в Telegram...")
-    try:
-        from telegram_reporter import send_weekly_summary_report
-        result = send_weekly_summary_report()
-        log.info("Telegram weekly summary: %s", result)
-    except Exception as e:
-        log.error("Ошибка еженедельного отчёта: %s", e)
-
-
-async def scheduled_tg_evening_report():
-    """Вечерний отчёт (16:30) — итоги текущего дня."""
-    log.info("📨 Вечерний отчёт в Telegram...")
-    try:
-        from telegram_reporter import send_evening_report
-        result = send_evening_report()
-        log.info("Telegram evening report: %s", result)
-    except Exception as e:
-        log.error("Ошибка вечернего отчёта: %s", e)
 
 async def _register_tg_webhook():
     """Регистрирует webhook в Telegram при старте."""
