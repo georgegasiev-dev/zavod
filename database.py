@@ -371,3 +371,48 @@ def get_week_balance(date_from: str) -> dict | None:
             return dict(row) if row else None
         except Exception:
             return None
+
+
+# ── Подписчики рассылки ───────────────────────────────────────────────────────
+
+def add_broadcast_user(chat_id: str, name: str = ""):
+    """Добавляет пользователя в список рассылки автоотчётов."""
+    with _conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS broadcast_users (
+                chat_id    TEXT PRIMARY KEY,
+                name       TEXT DEFAULT '',
+                added_at   TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO broadcast_users (chat_id, name, added_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(chat_id) DO UPDATE SET name=excluded.name
+        """, (str(chat_id), name))
+        conn.commit()
+
+
+def remove_broadcast_user(chat_id: str):
+    with _conn() as conn:
+        try:
+            conn.execute("DELETE FROM broadcast_users WHERE chat_id=?", (str(chat_id),))
+            conn.commit()
+        except Exception:
+            pass
+
+
+def get_broadcast_users() -> list[dict]:
+    """Возвращает всех подписчиков рассылки."""
+    with _conn() as conn:
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS broadcast_users (
+                    chat_id TEXT PRIMARY KEY, name TEXT DEFAULT '', added_at TEXT
+                )
+            """)
+            conn.commit()
+            rows = conn.execute("SELECT chat_id, name, added_at FROM broadcast_users").fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            return []
