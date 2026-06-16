@@ -18,7 +18,8 @@ from database import (save_month_data, merge_month_data, get_month_data, get_all
                        save_plan, get_plan, get_all_plans,
                        add_allowed_user, get_allowed_users, remove_allowed_user,
                        log_access, get_access_log,
-                       save_week_balance, get_week_balance)
+                       save_week_balance, get_week_balance,
+                       add_broadcast_user, remove_broadcast_user, get_broadcast_users)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -463,6 +464,55 @@ async def tg_webhook(request: Request):
             except Exception as e:
                 await reply(f"❌ Ошибка поиска: {e}")
 
+    elif cmd in ("/myid", "myid"):
+        await reply(f"Ваш Telegram ID: <code>{chat_id}</code>")
+
+    elif text.lower().startswith("/sub"):
+        # Только владелец управляет рассылкой
+        if chat_id != owner_id:
+            await reply("❌ Только владелец может управлять рассылкой.")
+        else:
+            parts = text.split(maxsplit=2)
+            subcmd = parts[1].lower() if len(parts) > 1 else ""
+
+            if subcmd == "list":
+                users = get_broadcast_users()
+                if not users:
+                    await reply("Подписчиков рассылки нет.")
+                else:
+                    lines = ["<b>Подписчики рассылки:</b>"]
+                    for u in users:
+                        name = f" ({u['name']})" if u.get('name') else ""
+                        lines.append(f"· {u['chat_id']}{name}")
+                    await reply("\n".join(lines))
+
+            elif subcmd == "add":
+                if len(parts) < 3:
+                    await reply("Использование: /sub add ID [имя]\nНапример: /sub add 123456789 Сергей")
+                else:
+                    args    = parts[2].split(maxsplit=1)
+                    new_id  = args[0].strip()
+                    name    = args[1].strip() if len(args) > 1 else ""
+                    # Убеждаемся что пользователь зарегистрирован в боте
+                    add_broadcast_user(new_id, name)
+                    label = f" ({name})" if name else ""
+                    await reply(f"✅ {new_id}{label} добавлен в рассылку.")
+
+            elif subcmd == "remove":
+                if len(parts) < 3:
+                    await reply("Использование: /sub remove ID")
+                else:
+                    rem_id = parts[2].strip()
+                    remove_broadcast_user(rem_id)
+                    await reply(f"✅ {rem_id} удалён из рассылки.")
+            else:
+                await reply(
+                    "<b>Управление рассылкой:</b>\n"
+                    "/sub list — список подписчиков\n"
+                    "/sub add ID [имя] — добавить\n"
+                    "/sub remove ID — удалить"
+                )
+
     elif cmd in ("/week", "/неделя", "неделя"):
         await reply("⏳ Формирую недельный отчёт...")
         try:
@@ -535,7 +585,9 @@ async def tg_webhook(request: Request):
             "/find [запрос] — поиск по операциям\n"
             "/sync — загрузить выписку из Raiffeisen\n"
             "/status — состояние базы данных\n"
-            "/help — эта справка\n\n"
+            "/help — эта справка\n"
+            "/myid — узнать свой Telegram ID\n"
+            "/sub — управление рассылкой (только владелец)\n\n"
             "Или просто пиши свободным текстом — я пойму 🤖\n\n"
             "🕔 Вечерний отчёт — в 16:30 МСК\n"
             "🕗 Утренний отчёт — в 8:00 МСК"
