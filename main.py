@@ -10,6 +10,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 import pandas as pd, io, json, secrets, os, logging
 from datetime import datetime
 from classifier import classify_operations
@@ -126,7 +127,7 @@ REPORT_MINUTE = int(os.getenv("REPORT_MINUTE", "30"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduler.add_job(scheduled_gmail_sync, CronTrigger(hour=SYNC_HOUR, minute=SYNC_MINUTE),
+    scheduler.add_job(scheduled_gmail_sync, IntervalTrigger(minutes=30),
                       id="gmail_sync", replace_existing=True)
     scheduler.add_job(scheduled_tg_report, CronTrigger(hour=REPORT_HOUR, minute=REPORT_MINUTE),
                       id="tg_report", replace_existing=True)
