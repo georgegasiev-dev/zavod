@@ -130,6 +130,19 @@ def _short_contractor(name: str) -> str:
     return name
 
 
+
+def _month_income_total(month: str) -> float:
+    """Считает сумму всех поступлений за месяц."""
+    try:
+        from database import get_month_data
+        data = get_month_data(month)
+        if not data or not data.get("ops"):
+            return 0.0
+        return sum(op.get("amount", 0) for op in data["ops"] if not op.get("is_debit"))
+    except Exception:
+        return 0.0
+
+
 def _get_balance() -> str | None:
     try:
         from database import get_setting
@@ -288,8 +301,12 @@ def build_evening_report(target_date: str | None = None) -> str:
     lines = [f"<b>Отчёт о движении денег за {_date_label(dt)}</b>", ""]
 
     balance = _get_balance()
+    month_total_in = _month_income_total(month)
     if balance:
-        lines += [f"На счету: {balance}", ""]
+        lines.append(f"На счету: {balance}")
+        if month_total_in:
+            lines.append(f"  Всего поступило с начала месяца: {_fmt(month_total_in)} ₽")
+        lines.append("")
 
     in_line  = f"Поступлений — {_fmt(total_in)} ₽"
     out_line = f"Расходов — {_fmt(total_out)} ₽"
@@ -330,9 +347,14 @@ def build_morning_report(target_date: str | None = None) -> str:
 
     lines = [f"<b>Отчёт на утро {_date_label(today_dt)}</b>", ""]
 
-    balance = _get_balance()
+    balance  = _get_balance()
+    dt_month = MONTH_NAMES.get(dt.month, "")
+    month_total_in = _month_income_total(dt_month)
     if balance:
-        lines += [f"На счету: {balance}", ""]
+        lines.append(f"На счету: {balance}")
+        if month_total_in:
+            lines.append(f"  Всего поступило с начала месяца: {_fmt(month_total_in)} ₽")
+        lines.append("")
 
     if not credit_ops and not debit_ops:
         lines.append(f"За {_date_label(dt)} операций в выписке нет.")
