@@ -525,6 +525,14 @@ async def tg_webhook(request: Request):
                     "/sub remove ID — удалить"
                 )
 
+    elif cmd in ("/babki", "babki", "бабки"):
+        await reply("⏳ Формирую отчёт...")
+        try:
+            from telegram_reporter import build_babki_report
+            await reply(build_babki_report())
+        except Exception as e:
+            await reply(f"❌ Ошибка: {e}")
+
     elif cmd in ("/week", "/неделя", "неделя"):
         await reply("⏳ Формирую недельный отчёт...")
         try:
@@ -592,6 +600,7 @@ async def tg_webhook(request: Request):
             "👋 <b>Новатор · Отчётный бот</b>\n\n"
             "<b>Команды:</b>\n"
             "/report — вечерний отчёт за сегодня\n"
+            "/babki — поступления с начала недели\n"
             "/morning — утренний отчёт (итоги вчерашнего дня)\n"
             "/week — отчёт за прошлую неделю\n"
             "/find [запрос] — поиск по операциям\n"
