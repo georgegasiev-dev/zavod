@@ -537,3 +537,73 @@ def send_weekly_summary_report() -> dict:
     except Exception as e:
         log.error("send_weekly_summary_report: %s", e)
         return {"status": "error", "reason": str(e)}
+
+
+# ── Отчёт /babki — поступления с начала недели ───────────────────────────────
+
+def build_babki_report() -> str:
+    """Текущий баланс + поступления с начала месяца + с начала недели + список."""
+    from database import get_month_data
+
+    today    = datetime.now()
+    # Начало текущей недели (понедельник)
+    week_mon = today - timedelta(days=today.weekday())
+    month    = MONTH_NAMES.get(today.month, "")
+
+    # Все даты текущей недели до сегодня включительно
+    week_dates = set()
+    for i in range((today - week_mon).days + 1):
+        dt = week_mon + timedelta(days=i)
+        week_dates.add(dt.strftime("%d.%m.%Y"))
+
+    data = get_month_data(month)
+    ops  = data.get("ops", []) if data else []
+
+    # Поступления с начала месяца
+    month_income = sum(op.get("amount", 0) for op in ops if not op.get("is_debit"))
+
+    # Поступления с начала недели
+    week_ops = [op for op in ops
+                if not op.get("is_debit") and op.get("date", "") in week_dates]
+    week_income = sum(op.get("amount", 0) for op in week_ops)
+
+    # Группируем по контрагенту
+    client_totals: dict[str, float] = {}
+    for op in week_ops:
+        c = _clean_name(op.get("contractor", "—"))
+        client_totals[c] = client_totals.get(c, 0) + op.get("amount", 0)
+
+    # Формируем отчёт
+    mon_label = _date_label(week_mon)
+    today_label = _date_label(today)
+
+    lines = [f"<b>💰 БАБКИ · {today_label}</b>", ""]
+
+    balance = _get_balance()
+    if balance:
+        lines.append(f"На счету: {balance}")
+
+    lines.append(f"Всего поступило с начала месяца: {_fmt(month_income)} ₽")
+    lines.append(f"Поступило с начала недели: {_fmt(week_income)} ₽")
+    lines.append("")
+
+    if client_totals:
+        lines.append(f"<b>Поступления с {mon_label}:</b>")
+        for c, s in sorted(client_totals.items(), key=lambda x: -x[1]):
+            lines.append(f"  {c} — {_fmt(s)} руб.")
+    else:
+        lines.append("Поступлений с начала недели нет.")
+
+    return "\n".join(lines)
+
+
+def send_babki_report() -> dict:
+    if not TG_TOKEN or not TG_CHAT_ID:
+        return {"status": "skip"}
+    try:
+        text = build_babki_report()
+        ok   = _tg_send(text)
+        return {"status": "ok" if ok else "error", "length": len(text)}
+    except Exception as e:
+        log.error("send_babki_report: %s", e)
+        return {"status": "error", "reason": str(e)}
