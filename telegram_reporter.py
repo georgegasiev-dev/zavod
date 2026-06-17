@@ -594,6 +594,33 @@ def build_babki_report() -> str:
     else:
         lines.append("Поступлений с начала недели нет.")
 
+    # Расходы с начала недели
+    week_debit_ops = [op for op in ops
+                     if op.get("is_debit") and op.get("date", "") in week_dates]
+    week_expenses = sum(op.get("amount", 0) for op in week_debit_ops)
+
+    if week_debit_ops:
+        cat_totals: dict[str, float] = {}
+        cat_contrs: dict[str, dict]  = {}
+        for op in week_debit_ops:
+            cat = op.get("cat", "Прочее")
+            amt = op.get("amount", 0)
+            cat_totals[cat] = cat_totals.get(cat, 0) + amt
+            c = op.get("contractor", "—")
+            cat_contrs.setdefault(cat, {})
+            cat_contrs[cat][c] = cat_contrs[cat].get(c, 0) + amt
+
+        lines.append("")
+        lines.append(f"<b>Расходы с {mon_label} — {_fmt(week_expenses)} ₽:</b>")
+        for cat, s in sorted(cat_totals.items(), key=lambda x: -x[1]):
+            contrs   = cat_contrs.get(cat, {})
+            has_detail = cat in DETAIL_CATS or len(contrs) > 1
+            lines.append(f"  {cat} — {_fmt(s)} руб.")
+            if has_detail:
+                for c, v in sorted(contrs.items(), key=lambda x: -x[1]):
+                    lines.append(f"    {_short_contractor(c)} — {_fmt(v)} руб.")
+            lines.append("")
+
     return "\n".join(lines)
 
 
