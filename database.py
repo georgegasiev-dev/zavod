@@ -416,3 +416,71 @@ def get_broadcast_users() -> list[dict]:
             return [dict(r) for r in rows]
         except Exception:
             return []
+
+
+# ─── ЕОВР ──────────────────────────────────────────────────────────────────
+
+def _init_eovr():
+    with _conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS eovr_cache (
+                sheet_title TEXT PRIMARY KEY,
+                year        INTEGER NOT NULL,
+                month       INTEGER NOT NULL,
+                totals      TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+
+_init_eovr()
+
+
+def save_eovr_month(sheet_title: str, year: int, month: int, totals: dict):
+    """Сохранить итоги месяца ЕОВР (lush, sush, sborka, lam, obr)."""
+    with _conn() as conn:
+        conn.execute("""
+            INSERT INTO eovr_cache (sheet_title, year, month, totals, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(sheet_title) DO UPDATE SET
+                totals=excluded.totals, updated_at=excluded.updated_at
+        """, (sheet_title, year, month, json.dumps(totals, ensure_ascii=False),
+              datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+
+
+def get_eovr_month(sheet_title: str) -> dict | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT totals, updated_at FROM eovr_cache WHERE sheet_title=?",
+            (sheet_title,)
+        ).fetchone()
+        if not row:
+            return None
+        return {**json.loads(row['totals']), '_updated_at': row['updated_at']}
+
+
+def get_eovr_year(year: int) -> list[dict]:
+    """Все месяцы года, отсортированные по месяцу."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT sheet_title, month, totals, updated_at FROM eovr_cache WHERE year=? ORDER BY month",
+            (year,)
+        ).fetchall()
+        result = []
+        for r in rows:
+            t = json.loads(r['totals'])
+            t['month'] = r['month']
+            t['sheet_title'] = r['sheet_title']
+            t['updated_at'] = r['updated_at']
+            result.append(t)
+        return result
+
+
+def get_eovr_latest_updated() -> str | None:
+    """Время последнего обновления любого листа ЕОВР."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT updated_at FROM eovr_cache ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+        return row['updated_at'] if row else None
