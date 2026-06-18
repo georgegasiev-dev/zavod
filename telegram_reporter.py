@@ -704,12 +704,10 @@ def build_eovr_report(year: int | None = None, month: int | None = None) -> str:
             continue
         for d in days:
             val = int(d.get(key, 0))
-            day_num = d['day']
-            prefix = f"{day_num:2}.{month:02}"
             if val == 0:
-                lines.append(f"  {prefix}  —")
-            else:
-                lines.append(f"  {prefix}  {_fmt_n(val)}")
+                continue
+            day_num = d['day']
+            lines.append(f"  {day_num:2}.{month:02}  {_fmt_n(val)}")
 
     return "\n".join(lines)
 
