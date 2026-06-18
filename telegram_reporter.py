@@ -634,3 +634,72 @@ def send_babki_report() -> dict:
     except Exception as e:
         log.error("send_babki_report: %s", e)
         return {"status": "error", "reason": str(e)}
+
+
+# ─── ЕОВР отчёт ────────────────────────────────────────────────────────────
+
+MONTH_FULL_RU = ['','Январь','Февраль','Март','Апрель','Май','Июнь',
+                 'Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь']
+
+def build_eovr_report(year: int | None = None) -> str:
+    """Отчёт ЕОВР по месяцам года — итоги по всем переделам с акцентом на Сборку."""
+    from database import get_eovr_year, get_eovr_latest_updated
+    from datetime import datetime as dt
+
+    if year is None:
+        year = dt.now().year
+
+    months = get_eovr_year(year)
+    updated = get_eovr_latest_updated()
+    upd_str = updated[:16] if updated else '—'
+
+    if not months:
+        return f"📋 <b>ЕОВР {year}</b>\n\nДанных нет. Запусти /sync_eovr для загрузки."
+
+    lines = [f"📋 <b>ЕОВР {year} — выработка по месяцам</b>"]
+    lines.append(f"<i>Обновлено: {upd_str}</i>")
+    lines.append("")
+
+    # Сборка — главный блок
+    lines.append("🟡 <b>Сборка (листов)</b>")
+    total_sborka = 0
+    for m in months:
+        val = int(m.get('sborka', 0))
+        total_sborka += val
+        bar = _mini_bar(val, max(int(x.get('sborka', 0)) for x in months))
+        lines.append(f"  {MONTH_FULL_RU[m['month']]:<12} {bar} {val:>7,}".replace(',', ' '))
+    lines.append(f"  {'Итого':<12} {'':10} {total_sborka:>7,}".replace(',', ' '))
+    lines.append("")
+
+    # Остальные переделы — компактно
+    metrics = [
+        ('lush',   '🔵 Лущилка'),
+        ('sush',   '🟢 Сушилка'),
+        ('lam',    '🩷 Ламинация'),
+        ('obr',    '🟣 Обрезка'),
+    ]
+    for key, label in metrics:
+        total = sum(int(m.get(key, 0)) for m in months)
+        avg   = total // len(months) if months else 0
+        lines.append(f"{label}: итого <b>{total:,}</b> · ср/мес <b>{avg:,}</b>".replace(',', ' '))
+
+    return "\n".join(lines)
+
+
+def _mini_bar(val: int, max_val: int, width: int = 8) -> str:
+    if max_val <= 0:
+        return '░' * width
+    filled = round((val / max_val) * width)
+    return '█' * filled + '░' * (width - filled)
+
+
+def send_eovr_report(year: int | None = None) -> dict:
+    if not TG_TOKEN or not TG_CHAT_ID:
+        return {"status": "skip"}
+    try:
+        text = build_eovr_report(year)
+        ok   = _tg_send(text)
+        return {"status": "ok" if ok else "error", "length": len(text)}
+    except Exception as e:
+        log.error("send_eovr_report: %s", e)
+        return {"status": "error", "reason": str(e)}
