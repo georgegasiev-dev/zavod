@@ -484,3 +484,46 @@ def get_eovr_latest_updated() -> str | None:
             "SELECT updated_at FROM eovr_cache ORDER BY updated_at DESC LIMIT 1"
         ).fetchone()
         return row['updated_at'] if row else None
+
+
+def _init_eovr_days():
+    with _conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS eovr_days (
+                sheet_title TEXT NOT NULL,
+                day         INTEGER NOT NULL,
+                lush        REAL DEFAULT 0,
+                sush        REAL DEFAULT 0,
+                sborka      REAL DEFAULT 0,
+                lam         REAL DEFAULT 0,
+                obr         REAL DEFAULT 0,
+                PRIMARY KEY (sheet_title, day)
+            )
+        """)
+        conn.commit()
+
+_init_eovr_days()
+
+
+def save_eovr_days(sheet_title: str, days: dict):
+    """Сохранить посуточные данные ЕОВР. days = {1: {lush,sush,sborka,lam,obr}, ...}"""
+    with _conn() as conn:
+        conn.execute("DELETE FROM eovr_days WHERE sheet_title=?", (sheet_title,))
+        for day, v in days.items():
+            conn.execute("""
+                INSERT INTO eovr_days (sheet_title, day, lush, sush, sborka, lam, obr)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (sheet_title, int(day),
+                  v.get('lush',0), v.get('sush',0), v.get('sborka',0),
+                  v.get('lam',0),  v.get('obr',0)))
+        conn.commit()
+
+
+def get_eovr_days(sheet_title: str) -> list[dict]:
+    """Посуточные данные листа, отсортированные по дню."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT day, lush, sush, sborka, lam, obr FROM eovr_days WHERE sheet_title=? ORDER BY day",
+            (sheet_title,)
+        ).fetchall()
+        return [dict(r) for r in rows]
