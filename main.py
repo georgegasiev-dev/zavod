@@ -235,7 +235,7 @@ async def sync_eovr_all():
         async with httpx.AsyncClient(timeout=30) as client:
             for s in sheets:
                 try:
-                    rng = f"'{s['title']}'!A1:AA110"
+                    rng = f"'{s['title']}'!A1:AA200"
                     resp = await client.get(
                         f"https://sheets.googleapis.com/v4/spreadsheets/{EOVR_SHEET_ID}/values/{rng}",
                         params={"key": EOVR_API_KEY}
@@ -245,6 +245,7 @@ async def sync_eovr_all():
                     totals, days = _eovr_parse_rows(rows)
                     save_eovr_month(s["title"], s["year"], s["month"], totals)
                     save_eovr_days(s["title"], days)
+                    log.info("ЕОВР лист %s: sborka=%s дней=%d", s["title"], totals.get('sborka'), len(days))
                     saved += 1
                 except Exception as e:
                     log.warning("ЕОВР: ошибка листа %s: %s", s["title"], e)
@@ -736,7 +737,19 @@ async def tg_webhook(request: Request):
             result = await sync_eovr_all()
             saved = result.get("saved", 0)
             total = result.get("total", 0)
-            await reply(f"✅ ЕОВР обновлён: {saved}/{total} листов загружено")
+            # Показать сколько дней в текущем месяце
+            from datetime import datetime as _dt
+            from database import get_eovr_days, get_eovr_year
+            now = _dt.now()
+            months = get_eovr_year(now.year)
+            cur = next((m for m in months if m['month'] == now.month), None)
+            days_info = ""
+            if cur:
+                days = get_eovr_days(cur['sheet_title'])
+                days_info = f"\nТекущий месяц: {len(days)} дней в базе"
+                if days:
+                    days_info += f" (1–{max(d['day'] for d in days)})"
+            await reply(f"✅ ЕОВР обновлён: {saved}/{total} листов{days_info}")
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
