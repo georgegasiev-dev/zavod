@@ -640,64 +640,85 @@ def send_babki_report() -> dict:
 
 MONTH_FULL_RU = ['','Январь','Февраль','Март','Апрель','Май','Июнь',
                  'Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь']
+MONTH_SHORT_RU = ['','янв','фев','мар','апр','май','июн',
+                  'июл','авг','сен','окт','ноя','дек']
 
-def build_eovr_report(year: int | None = None) -> str:
-    """Отчёт ЕОВР по месяцам года — итоги по всем переделам с акцентом на Сборку."""
-    from database import get_eovr_year, get_eovr_latest_updated
+_METRICS = [
+    ('lush',   'Лущилка',   'л'),
+    ('sush',   'Сушилка',   'л'),
+    ('sborka', 'Сборка',    'л'),
+    ('lam',    'Ламинация', 'м²'),
+    ('obr',    'Обрезка',   'л'),
+]
+
+def _fmt_n(v: int) -> str:
+    """12 386 → '12 386'"""
+    return f"{v:,}".replace(',', '\u202f')  # узкий неразрывный пробел
+
+
+def build_eovr_report(year: int | None = None, month: int | None = None) -> str:
+    """
+    Отчёт ЕОВР:
+    - итоги с начала месяца по каждому переделу
+    - детализация по дням для каждого передела
+    """
+    from database import get_eovr_year, get_eovr_days, get_eovr_latest_updated
     from datetime import datetime as dt
 
-    if year is None:
-        year = dt.now().year
+    now = dt.now()
+    if year  is None: year  = now.year
+    if month is None: month = now.month
 
-    months = get_eovr_year(year)
-    updated = get_eovr_latest_updated()
-    upd_str = updated[:16] if updated else '—'
+    # Найти нужный лист
+    months_data = get_eovr_year(year)
+    target = next((m for m in months_data if m['month'] == month), None)
 
-    if not months:
-        return f"📋 <b>ЕОВР {year}</b>\n\nДанных нет. Запусти /sync_eovr для загрузки."
+    if not target:
+        return (f"📋 <b>ЕОВР {MONTH_FULL_RU[month]} {year}</b>\n\n"
+                f"Данных нет. Запусти /sync_eovr для загрузки.")
 
-    lines = [f"📋 <b>ЕОВР {year} — выработка по месяцам</b>"]
-    lines.append(f"<i>Обновлено: {upd_str}</i>")
-    lines.append("")
+    sheet_title = target['sheet_title']
+    days = get_eovr_days(sheet_title)  # [{day, lush, sush, sborka, lam, obr}, ...]
+    updated = (target.get('updated_at') or '')[:16]
+    mon_short = MONTH_SHORT_RU[month]
 
-    # Сборка — главный блок
-    lines.append("🟡 <b>Сборка (листов)</b>")
-    total_sborka = 0
-    for m in months:
-        val = int(m.get('sborka', 0))
-        total_sborka += val
-        bar = _mini_bar(val, max(int(x.get('sborka', 0)) for x in months))
-        lines.append(f"  {MONTH_FULL_RU[m['month']]:<12} {bar} {val:>7,}".replace(',', ' '))
-    lines.append(f"  {'Итого':<12} {'':10} {total_sborka:>7,}".replace(',', ' '))
-    lines.append("")
-
-    # Остальные переделы — компактно
-    metrics = [
-        ('lush',   '🔵 Лущилка'),
-        ('sush',   '🟢 Сушилка'),
-        ('lam',    '🩷 Ламинация'),
-        ('obr',    '🟣 Обрезка'),
+    lines = [
+        f"📋 <b>ЕОВР {MONTH_FULL_RU[month]} {year}</b>",
+        f"<i>Обновлено: {updated}</i>",
+        "",
+        "━━━ Итого с начала месяца ━━━",
     ]
-    for key, label in metrics:
-        total = sum(int(m.get(key, 0)) for m in months)
-        avg   = total // len(months) if months else 0
-        lines.append(f"{label}: итого <b>{total:,}</b> · ср/мес <b>{avg:,}</b>".replace(',', ' '))
+
+    for key, label, unit in _METRICS:
+        val = int(target.get(key, 0))
+        lines.append(f"{label}: <b>{_fmt_n(val)}</b> {unit}")
+
+    lines.append("")
+    lines.append("━━━ Детализация по дням ━━━")
+
+    for key, label, unit in _METRICS:
+        lines.append("")
+        lines.append(f"<b>{label}:</b>")
+        if not days:
+            lines.append("  нет данных")
+            continue
+        for d in days:
+            val = int(d.get(key, 0))
+            day_num = d['day']
+            prefix = f"{day_num:2}.{month:02}"
+            if val == 0:
+                lines.append(f"  {prefix}  —")
+            else:
+                lines.append(f"  {prefix}  {_fmt_n(val)}")
 
     return "\n".join(lines)
 
 
-def _mini_bar(val: int, max_val: int, width: int = 8) -> str:
-    if max_val <= 0:
-        return '░' * width
-    filled = round((val / max_val) * width)
-    return '█' * filled + '░' * (width - filled)
-
-
-def send_eovr_report(year: int | None = None) -> dict:
+def send_eovr_report(year: int | None = None, month: int | None = None) -> dict:
     if not TG_TOKEN or not TG_CHAT_ID:
         return {"status": "skip"}
     try:
-        text = build_eovr_report(year)
+        text = build_eovr_report(year, month)
         ok   = _tg_send(text)
         return {"status": "ok" if ok else "error", "length": len(text)}
     except Exception as e:
