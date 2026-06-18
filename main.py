@@ -20,7 +20,8 @@ from database import (save_month_data, merge_month_data, get_month_data, get_all
                        add_allowed_user, get_allowed_users, remove_allowed_user,
                        log_access, get_access_log,
                        save_week_balance, get_week_balance,
-                       add_broadcast_user, remove_broadcast_user, get_broadcast_users)
+                       add_broadcast_user, remove_broadcast_user, get_broadcast_users,
+                       save_eovr_month, get_eovr_year, get_eovr_latest_updated)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -105,6 +106,141 @@ async def scheduled_sunday_sync():
     except Exception as e:
         log.error("Ошибка воскресной синхронизации: %s", e)
 
+
+# ─── ЕОВР: парсер Google Sheets ────────────────────────────────────────────
+
+EOVR_SHEET_ID = "1iYEuupLfhvM-jS4D8NiaL2dcnoUheu1GRPy5UJc9yUg"
+EOVR_API_KEY  = "AIzaSyAdAPQ2x7EMsBH-JBusw6ioxQZ8xdPbEP0"
+
+_EOVR_MONTH_NAMES = {
+    'январь':1,'февраль':2,'март':3,'апрель':4,'май':5,'июнь':6,
+    'июль':7,'август':8,'сентябрь':9,'октябрь':10,'ноябрь':11,'декабрь':12,
+    'Январь':1,'Февраль':2,'Март':3,'Апрель':4,'Май':5,'Июнь':6,
+    'Июль':7,'Август':8,'Сентябрь':9,'Октябрь':10,'Ноябрь':11,'Декабрь':12,
+}
+
+
+def _eovr_parse_sheet_name(name: str):
+    parts = name.strip().split()
+    month = year = None
+    for p in parts:
+        mn = _EOVR_MONTH_NAMES.get(p)
+        if mn:
+            month = mn
+        y = int(p) if p.isdigit() else None
+        if y and 2016 <= y <= 2030:
+            year = y
+    return (month, year) if month and year else None
+
+
+def _eovr_parse_rows(rows: list) -> dict:
+    """Парсит строки листа ЕОВР → итоги за месяц {lush, sush, sborka, lam, obr}."""
+    COL_LUSH   = [2, 3, 4, 5, 6]
+    COL_SUSH   = 7
+    COL_SBORKA = [9, 10, 11, 12]
+    COL_LAM    = 16
+    COL_OBR    = 19
+
+    def parseN(r, idx):
+        if idx >= len(r): return 0
+        v = str(r[idx] or '').replace(',', '.').replace(' ', '')
+        v = ''.join(c for c in v if c.isdigit() or c == '.')
+        try:
+            n = float(v)
+            return n if 0 < n < 100000 else 0
+        except Exception:
+            return 0
+
+    def sumCols(r, cols):
+        return sum(parseN(r, c) for c in cols)
+
+    # Найти строку-заголовок
+    header_row = -1
+    for i, row in enumerate(rows[:10]):
+        j = '|'.join(str(c).lower() for c in row)
+        if 'фан' in j and 'тонкомер' in j:
+            header_row = i
+            break
+    if header_row < 0:
+        for i, row in enumerate(rows[:10]):
+            if any('лущилка' in str(c).lower() for c in row):
+                header_row = i + 1
+                break
+
+    data_start = max(header_row + 1, 5)
+    totals = dict(lush=0, sush=0, sborka=0, lam=0, obr=0)
+    last_date = None
+
+    for row in rows[data_start:]:
+        if not row or len(row) < 2:
+            continue
+        pd_val = str(row[0]).strip()
+        if pd_val.isdigit() and 1 <= int(pd_val) <= 31:
+            last_date = int(pd_val)
+        shift = str(row[1]).strip()
+        if not shift.isdigit() or not (1 <= int(shift) <= 3) or last_date is None:
+            continue
+        totals['lush']   += sumCols(row, COL_LUSH)
+        totals['sush']   += parseN(row, COL_SUSH)
+        totals['sborka'] += sumCols(row, COL_SBORKA)
+        totals['lam']    += parseN(row, COL_LAM)
+        totals['obr']    += parseN(row, COL_OBR)
+
+    return {k: round(v) for k, v in totals.items()}
+
+
+async def sync_eovr_all():
+    """Скачивает все листы ЕОВР из Google Sheets и сохраняет итоги в SQLite."""
+    import httpx
+    log.info("🔄 ЕОВР: начало синхронизации...")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Получить список листов
+            r = await client.get(
+                f"https://sheets.googleapis.com/v4/spreadsheets/{EOVR_SHEET_ID}",
+                params={"fields": "sheets.properties", "key": EOVR_API_KEY}
+            )
+            r.raise_for_status()
+            sheets_info = r.json().get("sheets", [])
+
+        sheets = []
+        for s in sheets_info:
+            title = s["properties"]["title"]
+            parsed = _eovr_parse_sheet_name(title)
+            if parsed:
+                sheets.append({"title": title, "month": parsed[0], "year": parsed[1]})
+
+        log.info("ЕОВР: найдено %d листов", len(sheets))
+        saved = 0
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            for s in sheets:
+                try:
+                    rng = f"'{s['title']}'!A1:AA110"
+                    resp = await client.get(
+                        f"https://sheets.googleapis.com/v4/spreadsheets/{EOVR_SHEET_ID}/values/{rng}",
+                        params={"key": EOVR_API_KEY}
+                    )
+                    resp.raise_for_status()
+                    rows = resp.json().get("values", [])
+                    totals = _eovr_parse_rows(rows)
+                    save_eovr_month(s["title"], s["year"], s["month"], totals)
+                    saved += 1
+                except Exception as e:
+                    log.warning("ЕОВР: ошибка листа %s: %s", s["title"], e)
+
+        log.info("✅ ЕОВР: синхронизировано %d/%d листов", saved, len(sheets))
+        return {"saved": saved, "total": len(sheets)}
+    except Exception as e:
+        log.error("ЕОВР sync error: %s", e)
+        return {"error": str(e)}
+
+
+async def scheduled_eovr_sync():
+    """Плановая синхронизация ЕОВР по расписанию."""
+    log.info("⏰ ЕОВР: плановый опрос Google Sheets")
+    await sync_eovr_all()
+
 async def _register_tg_webhook():
     """Регистрирует webhook в Telegram при старте."""
     import httpx
@@ -153,6 +289,10 @@ async def lifespan(app: FastAPI):
     # Синхронизация выписки в воскресенье 23:50 МСК — для актуального баланса в недельном отчёте
     scheduler.add_job(scheduled_sunday_sync, CronTrigger(day_of_week="sun", hour=23, minute=50),
                       id="sunday_sync", replace_existing=True)
+    # ЕОВР: опрос Google Sheets в 9:00, 10:00, 11:00, 18:00 МСК
+    for _h in (9, 10, 11, 18):
+        scheduler.add_job(scheduled_eovr_sync, CronTrigger(hour=_h, minute=0),
+                          id=f"eovr_sync_{_h}", replace_existing=True)
     scheduler.start()
     log.info("Scheduler started. Gmail sync %02d:%02d, TG report %02d:%02d МСК.",
              SYNC_HOUR, SYNC_MINUTE, REPORT_HOUR, REPORT_MINUTE)
@@ -551,6 +691,30 @@ async def tg_webhook(request: Request):
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
+    elif cmd in ("/еовр", "/eovr", "еовр", "eovr", "выработка"):
+        await reply("⏳ Загружаю данные ЕОВР...")
+        try:
+            from telegram_reporter import build_eovr_report
+            parts = text.split()
+            year = None
+            for p in parts:
+                if p.isdigit() and 2016 <= int(p) <= 2030:
+                    year = int(p)
+            report_text = build_eovr_report(year)
+            await reply(report_text)
+        except Exception as e:
+            await reply(f"❌ Ошибка: {e}")
+
+    elif cmd in ("/sync_eovr", "/обновить_еовр"):
+        await reply("⏳ Синхронизирую ЕОВР с Google Sheets...")
+        try:
+            result = await sync_eovr_all()
+            saved = result.get("saved", 0)
+            total = result.get("total", 0)
+            await reply(f"✅ ЕОВР обновлён: {saved}/{total} листов загружено")
+        except Exception as e:
+            await reply(f"❌ Ошибка: {e}")
+
     elif cmd in ("/sync", "sync", "обновить"):
         await reply("⏳ Запрашиваю выписку из Raiffeisen API...")
         try:
@@ -598,20 +762,21 @@ async def tg_webhook(request: Request):
     elif cmd in ("/help", "help", "помощь"):
         await reply(
             "👋 <b>Новатор · Отчётный бот</b>\n\n"
-            "<b>Команды:</b>\n"
+            "<b>Финансы:</b>\n"
             "/report — вечерний отчёт за сегодня\n"
             "/babki — поступления с начала недели\n"
             "/morning — утренний отчёт (итоги вчерашнего дня)\n"
             "/week — отчёт за прошлую неделю\n"
             "/find [запрос] — поиск по операциям\n"
             "/sync — загрузить выписку из Raiffeisen\n"
-            "/status — состояние базы данных\n"
+            "/status — состояние базы данных\n\n"
+            "<b>Производство (ЕОВР):</b>\n"
+            "/еовр — выработка по месяцам за текущий год\n"
+            "/еовр 2025 — выработка за конкретный год\n"
+            "/sync_eovr — принудительно обновить данные ЕОВР\n\n"
             "/help — эта справка\n"
-            "/myid — узнать свой Telegram ID\n"
-            "/sub — управление рассылкой (только владелец)\n\n"
-            "Или просто пиши свободным текстом — я пойму 🤖\n\n"
-            "🕔 Вечерний отчёт — в 16:30 МСК\n"
-            "🕗 Утренний отчёт — в 8:00 МСК"
+            "/myid — узнать свой Telegram ID\n\n"
+            "🕔 ЕОВР обновляется автоматически в 9:00, 10:00, 11:00 и 18:00 МСК"
         )
     else:
         # Всё что не команда — отправляем AI-агенту
@@ -637,6 +802,23 @@ async def manual_sync(_: str = Depends(verify_admin)):
         return {"status": "ok", **result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/eovr/sync")
+async def eovr_sync_endpoint():
+    """Принудительная синхронизация ЕОВР из Google Sheets. Открытый эндпоинт (данные публичные)."""
+    result = await sync_eovr_all()
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+    return result
+
+
+@app.get("/api/eovr/year/{year}")
+def eovr_year_endpoint(year: int):
+    """Итоги ЕОВР по месяцам за год из кеша SQLite."""
+    months = get_eovr_year(year)
+    updated = get_eovr_latest_updated()
+    return {"year": year, "months": months, "updated_at": updated}
 
 @app.get("/api/sync/status")
 def sync_status(_: str = Depends(verify_admin)):
