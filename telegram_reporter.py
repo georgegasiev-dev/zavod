@@ -702,12 +702,17 @@ def build_eovr_report(year: int | None = None, month: int | None = None) -> str:
         if not days:
             lines.append("  нет данных")
             continue
+        from datetime import datetime as _dt
+        today = _dt.now().day
+        is_current_month = (year == _dt.now().year and month == _dt.now().month)
+
         for d in days:
-            val = int(d.get(key, 0))
-            if val == 0:
-                continue
             day_num = d['day']
-            lines.append(f"  {day_num:2}.{month:02}  {_fmt_n(val)}")
+            if is_current_month and day_num > today:
+                continue
+            val = int(d.get(key, 0))
+            val_str = _fmt_n(val) if val > 0 else '0'
+            lines.append(f"  {day_num:2}.{month:02}  {val_str}")
 
     return "\n".join(lines)
 
