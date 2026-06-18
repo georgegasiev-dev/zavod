@@ -21,7 +21,8 @@ from database import (save_month_data, merge_month_data, get_month_data, get_all
                        log_access, get_access_log,
                        save_week_balance, get_week_balance,
                        add_broadcast_user, remove_broadcast_user, get_broadcast_users,
-                       save_eovr_month, get_eovr_year, get_eovr_latest_updated)
+                       save_eovr_month, get_eovr_year, get_eovr_latest_updated,
+                       save_eovr_days, get_eovr_days)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -133,8 +134,11 @@ def _eovr_parse_sheet_name(name: str):
     return (month, year) if month and year else None
 
 
-def _eovr_parse_rows(rows: list) -> dict:
-    """Парсит строки листа ЕОВР → итоги за месяц {lush, sush, sborka, lam, obr}."""
+def _eovr_parse_rows(rows: list) -> tuple[dict, dict]:
+    """Парсит строки листа ЕОВР → (итоги, посуточные данные).
+    итоги = {lush, sush, sborka, lam, obr}
+    дни   = {1: {lush,sush,sborka,lam,obr}, 2: ..., ...}
+    """
     COL_LUSH   = [2, 3, 4, 5, 6]
     COL_SUSH   = 7
     COL_SBORKA = [9, 10, 11, 12]
@@ -168,7 +172,8 @@ def _eovr_parse_rows(rows: list) -> dict:
                 break
 
     data_start = max(header_row + 1, 5)
-    totals = dict(lush=0, sush=0, sborka=0, lam=0, obr=0)
+    totals = dict(lush=0.0, sush=0.0, sborka=0.0, lam=0.0, obr=0.0)
+    days: dict[int, dict] = {}
     last_date = None
 
     for row in rows[data_start:]:
@@ -180,13 +185,27 @@ def _eovr_parse_rows(rows: list) -> dict:
         shift = str(row[1]).strip()
         if not shift.isdigit() or not (1 <= int(shift) <= 3) or last_date is None:
             continue
-        totals['lush']   += sumCols(row, COL_LUSH)
-        totals['sush']   += parseN(row, COL_SUSH)
-        totals['sborka'] += sumCols(row, COL_SBORKA)
-        totals['lam']    += parseN(row, COL_LAM)
-        totals['obr']    += parseN(row, COL_OBR)
+        if last_date not in days:
+            days[last_date] = dict(lush=0.0, sush=0.0, sborka=0.0, lam=0.0, obr=0.0)
+        lush   = sumCols(row, COL_LUSH)
+        sush   = parseN(row, COL_SUSH)
+        sborka = sumCols(row, COL_SBORKA)
+        lam    = parseN(row, COL_LAM)
+        obr    = parseN(row, COL_OBR)
+        days[last_date]['lush']   += lush
+        days[last_date]['sush']   += sush
+        days[last_date]['sborka'] += sborka
+        days[last_date]['lam']    += lam
+        days[last_date]['obr']    += obr
+        totals['lush']   += lush
+        totals['sush']   += sush
+        totals['sborka'] += sborka
+        totals['lam']    += lam
+        totals['obr']    += obr
 
-    return {k: round(v) for k, v in totals.items()}
+    totals_rounded = {k: round(v) for k, v in totals.items()}
+    days_rounded   = {d: {k: round(v) for k, v in vals.items()} for d, vals in days.items()}
+    return totals_rounded, days_rounded
 
 
 async def sync_eovr_all():
@@ -223,8 +242,9 @@ async def sync_eovr_all():
                     )
                     resp.raise_for_status()
                     rows = resp.json().get("values", [])
-                    totals = _eovr_parse_rows(rows)
+                    totals, days = _eovr_parse_rows(rows)
                     save_eovr_month(s["title"], s["year"], s["month"], totals)
+                    save_eovr_days(s["title"], days)
                     saved += 1
                 except Exception as e:
                     log.warning("ЕОВР: ошибка листа %s: %s", s["title"], e)
@@ -695,12 +715,17 @@ async def tg_webhook(request: Request):
         await reply("⏳ Загружаю данные ЕОВР...")
         try:
             from telegram_reporter import build_eovr_report
+            from datetime import datetime as _dt
             parts = text.split()
-            year = None
-            for p in parts:
-                if p.isdigit() and 2016 <= int(p) <= 2030:
-                    year = int(p)
-            report_text = build_eovr_report(year)
+            year = month = None
+            for p in parts[1:]:
+                if p.isdigit():
+                    v = int(p)
+                    if 2016 <= v <= 2030:
+                        year = v
+                    elif 1 <= v <= 12:
+                        month = v
+            report_text = build_eovr_report(year, month)
             await reply(report_text)
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
