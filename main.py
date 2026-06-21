@@ -1067,6 +1067,24 @@ def get_contractors():
     return result
 
 
+@app.get("/api/contractor-ops")
+def get_contractor_ops(name: str = ""):
+    """Все операции контрагента по всем месяцам."""
+    from database import get_all_months
+    if not name:
+        raise HTTPException(status_code=400, detail="name обязателен")
+    name_lower = ' '.join(name.lower().strip().split())
+    all_data = get_all_months()
+    ops = []
+    for month, mdata in all_data.items():
+        for op in mdata.get('ops', []):
+            c = ' '.join((op.get('contractor') or '').lower().strip().split())
+            if c == name_lower:
+                ops.append({**op, '_month': month})
+    ops.sort(key=lambda o: o.get('date', ''), reverse=True)
+    return {"contractor": name, "ops": ops}
+
+
 @app.post("/api/contractors/update")
 async def update_contractor(
     payload: dict,
@@ -1682,4 +1700,5 @@ async def mcp_messages(session_id: str, request: Request):
     return JSONResponse(response)
 
 # redeploy-trigger: 2026-06-10T04:14:47.875173
+
 
