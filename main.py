@@ -1069,17 +1069,24 @@ def get_contractors():
 
 @app.get("/api/contractor-ops")
 def get_contractor_ops(name: str = ""):
-    """Все операции контрагента по всем месяцам."""
+    """Все операции контрагента по всем месяцам. Нечёткий матчинг: убирает ИНН-суффикс."""
+    import re
     from database import get_all_months
     if not name:
         raise HTTPException(status_code=400, detail="name обязателен")
-    name_lower = ' '.join(name.lower().strip().split())
+    # Нормализуем: убираем ", ИНН: ..." или ",ИНН:..." из поиска
+    def normalize(s):
+        s = ' '.join(s.lower().strip().split())
+        s = re.sub(r',?\s*инн\s*:\s*\d+', '', s).strip().rstrip(',').strip()
+        return s
+    name_norm = normalize(name)
     all_data = get_all_months()
     ops = []
     for month, mdata in all_data.items():
         for op in mdata.get('ops', []):
-            c = ' '.join((op.get('contractor') or '').lower().strip().split())
-            if c == name_lower:
+            c_raw = op.get('contractor') or ''
+            c_norm = normalize(c_raw)
+            if c_norm == name_norm:
                 ops.append({**op, '_month': month})
     ops.sort(key=lambda o: o.get('date', ''), reverse=True)
     return {"contractor": name, "ops": ops}
