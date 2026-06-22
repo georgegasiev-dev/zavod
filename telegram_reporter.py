@@ -693,8 +693,17 @@ def build_eovr_report(year: int | None = None, month: int | None = None) -> str:
         val = int(target.get(key, 0))
         lines.append(f"{label}: <b>{_fmt_n(val)}</b> {unit}")
 
+    from datetime import datetime as _dt
+    today_dt = _dt.now()
+    today = today_dt.day
+    is_current_month = (year == today_dt.year and month == today_dt.month)
+    show_from = max(1, today - 4) if is_current_month else 1
+
     lines.append("")
-    lines.append("━━━ Детализация по дням ━━━")
+    if is_current_month:
+        lines.append(f"━━━ Последние 5 дней ({show_from}.{month:02}–{today}.{month:02}) ━━━")
+    else:
+        lines.append("━━━ Детализация по дням ━━━")
 
     for key, label, unit in _METRICS:
         lines.append("")
@@ -702,13 +711,11 @@ def build_eovr_report(year: int | None = None, month: int | None = None) -> str:
         if not days:
             lines.append("  нет данных")
             continue
-        from datetime import datetime as _dt
-        today = _dt.now().day
-        is_current_month = (year == _dt.now().year and month == _dt.now().month)
-
         for d in days:
             day_num = d['day']
             if is_current_month and day_num > today:
+                continue
+            if is_current_month and day_num < show_from:
                 continue
             val = int(d.get(key, 0))
             val_str = _fmt_n(val) if val > 0 else '0'
