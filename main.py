@@ -214,7 +214,6 @@ async def sync_eovr_all():
     log.info("🔄 ЕОВР: начало синхронизации...")
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            # Получить список листов
             r = await client.get(
                 f"https://sheets.googleapis.com/v4/spreadsheets/{EOVR_SHEET_ID}",
                 params={"fields": "sheets.properties", "key": EOVR_API_KEY}
@@ -257,10 +256,56 @@ async def sync_eovr_all():
         return {"error": str(e)}
 
 
+async def sync_eovr_current():
+    """Синхронизирует только текущий месяц — быстро, для ручного запуска и cron."""
+    import httpx
+    from datetime import datetime as _dt
+    now = _dt.now()
+    log.info("🔄 ЕОВР: синхронизация текущего месяца %d/%d", now.month, now.year)
+    try:
+        # Найти лист текущего месяца
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(
+                f"https://sheets.googleapis.com/v4/spreadsheets/{EOVR_SHEET_ID}",
+                params={"fields": "sheets.properties", "key": EOVR_API_KEY}
+            )
+            r.raise_for_status()
+            sheets_info = r.json().get("sheets", [])
+
+        target = None
+        for s in sheets_info:
+            title = s["properties"]["title"]
+            parsed = _eovr_parse_sheet_name(title)
+            if parsed and parsed[0] == now.month and parsed[1] == now.year:
+                target = {"title": title, "month": parsed[0], "year": parsed[1]}
+                break
+
+        if not target:
+            return {"error": f"Лист за {now.month}/{now.year} не найден в таблице"}
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            rng = f"'{target['title']}'!A1:AA200"
+            resp = await client.get(
+                f"https://sheets.googleapis.com/v4/spreadsheets/{EOVR_SHEET_ID}/values/{rng}",
+                params={"key": EOVR_API_KEY}
+            )
+            resp.raise_for_status()
+            rows = resp.json().get("values", [])
+
+        totals, days = _eovr_parse_rows(rows)
+        save_eovr_month(target["title"], target["year"], target["month"], totals)
+        save_eovr_days(target["title"], days)
+        log.info("✅ ЕОВР текущий месяц: sborka=%s дней=%d", totals.get('sborka'), len(days))
+        return {"sheet": target["title"], "days": len(days), "totals": totals}
+    except Exception as e:
+        log.error("ЕОВР sync_current error: %s", e)
+        return {"error": str(e)}
+
+
 async def scheduled_eovr_sync():
-    """Плановая синхронизация ЕОВР по расписанию."""
+    """Плановая синхронизация ЕОВР по расписанию — только текущий месяц."""
     log.info("⏰ ЕОВР: плановый опрос Google Sheets")
-    await sync_eovr_all()
+    await sync_eovr_current()
 
 async def _register_tg_webhook():
     """Регистрирует webhook в Telegram при старте."""
@@ -732,24 +777,20 @@ async def tg_webhook(request: Request):
             await reply(f"❌ Ошибка: {e}")
 
     elif cmd in ("/sync_eovr", "/обновить_еовр"):
-        await reply("⏳ Синхронизирую ЕОВР с Google Sheets...")
+        await reply("⏳ Обновляю текущий месяц...")
         try:
-            result = await sync_eovr_all()
-            saved = result.get("saved", 0)
-            total = result.get("total", 0)
-            # Показать сколько дней в текущем месяце
-            from datetime import datetime as _dt
-            from database import get_eovr_days, get_eovr_year
-            now = _dt.now()
-            months = get_eovr_year(now.year)
-            cur = next((m for m in months if m['month'] == now.month), None)
-            days_info = ""
-            if cur:
-                days = get_eovr_days(cur['sheet_title'])
-                days_info = f"\nТекущий месяц: {len(days)} дней в базе"
-                if days:
-                    days_info += f" (1–{max(d['day'] for d in days)})"
-            await reply(f"✅ ЕОВР обновлён: {saved}/{total} листов{days_info}")
+            result = await sync_eovr_current()
+            if "error" in result:
+                await reply(f"❌ {result['error']}")
+            else:
+                days_count = result.get("days", 0)
+                sheet = result.get("sheet", "")
+                sborka = int(result.get("totals", {}).get("sborka", 0))
+                await reply(
+                    f"✅ <b>{sheet}</b> обновлён\n"
+                    f"Дней в базе: {days_count}\n"
+                    f"Сборка итого: {sborka:,} л".replace(',', '\u202f')
+                )
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
@@ -1065,31 +1106,6 @@ def get_contractors():
 
     result = sorted(contractor_stats.values(), key=lambda x: -x['total'])
     return result
-
-
-@app.get("/api/contractor-ops")
-def get_contractor_ops(name: str = ""):
-    """Все операции контрагента по всем месяцам. Нечёткий матчинг: убирает ИНН-суффикс."""
-    import re
-    from database import get_all_months
-    if not name:
-        raise HTTPException(status_code=400, detail="name обязателен")
-    # Нормализуем: убираем ", ИНН: ..." или ",ИНН:..." из поиска
-    def normalize(s):
-        s = ' '.join(s.lower().strip().split())
-        s = re.sub(r',?\s*инн\s*:\s*\d+', '', s).strip().rstrip(',').strip()
-        return s
-    name_norm = normalize(name)
-    all_data = get_all_months()
-    ops = []
-    for month, mdata in all_data.items():
-        for op in mdata.get('ops', []):
-            c_raw = op.get('contractor') or ''
-            c_norm = normalize(c_raw)
-            if c_norm == name_norm:
-                ops.append({**op, '_month': month})
-    ops.sort(key=lambda o: o.get('date', ''), reverse=True)
-    return {"contractor": name, "ops": ops}
 
 
 @app.post("/api/contractors/update")
@@ -1707,5 +1723,4 @@ async def mcp_messages(session_id: str, request: Request):
     return JSONResponse(response)
 
 # redeploy-trigger: 2026-06-10T04:14:47.875173
-
 
