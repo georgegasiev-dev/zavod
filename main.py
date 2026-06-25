@@ -913,8 +913,9 @@ def sync_status(_: str = Depends(verify_admin)):
     }
 
 @app.post("/api/upload-db")
-async def upload_db(request: Request, x_api_key: str = Header(None)):
+async def upload_db(request: Request):
     """Принимает бинарный файл БД и сохраняет как novator.db"""
+    x_api_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
     if x_api_key != API_KEY:
         raise HTTPException(status_code=403, detail="Forbidden")
     import os, shutil
