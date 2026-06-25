@@ -17,6 +17,7 @@ from classifier import classify_operations
 from database import (save_month_data, merge_month_data, get_month_data, get_all_months,
                        get_last_upload, save_contractor_mapping, save_contractor_comment,
                        save_plan, get_plan, get_all_plans,
+                       get_obligations, save_obligation,
                        add_allowed_user, get_allowed_users, remove_allowed_user,
                        log_access, get_access_log,
                        save_week_balance, get_week_balance,
@@ -539,6 +540,29 @@ async def save_plan_endpoint(request: Request):
     save_plan(month, plan)
     return {"status": "ok", "month": month, "keys": list(plan.keys())}
 
+
+
+
+@app.get("/api/obligations")
+def get_obligations_endpoint(month: str = "Июнь"):
+    return {"month": month, "obligations": get_obligations(month)}
+
+
+@app.post("/api/obligations")
+async def save_obligation_endpoint(request: Request):
+    body = await request.json()
+    month    = body.get("month", "Июнь")
+    category = body.get("category", "")
+    if not category:
+        return {"error": "category required"}
+    save_obligation(
+        month, category,
+        float(body.get("opening_debt", 0) or 0),
+        float(body.get("closing_debt", 0) or 0),
+        float(body.get("planned_budget", 0) or 0),
+        str(body.get("comment", "") or "")
+    )
+    return {"status": "ok", "month": month, "category": category}
 
 @app.get("/api/status")
 def get_status():

@@ -527,3 +527,52 @@ def get_eovr_days(sheet_title: str) -> list[dict]:
             (sheet_title,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ── Месячное закрытие / Обязательства ────────────────────────────────────────
+
+def _init_obligations():
+    with _conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS monthly_obligations (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                month      TEXT NOT NULL,
+                category   TEXT NOT NULL,
+                opening_debt  REAL DEFAULT 0,
+                closing_debt  REAL DEFAULT 0,
+                planned_budget REAL DEFAULT 0,
+                comment    TEXT DEFAULT '',
+                updated_at TEXT,
+                UNIQUE(month, category)
+            )
+        """)
+        conn.commit()
+
+_init_obligations()
+
+
+def get_obligations(month: str) -> list:
+    """Возвращает обязательства для месяца."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM monthly_obligations WHERE month=? ORDER BY id",
+            (month,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def save_obligation(month: str, category: str, opening_debt: float,
+                    closing_debt: float, planned_budget: float, comment: str):
+    """Сохраняет/обновляет строку обязательств."""
+    with _conn() as conn:
+        conn.execute("""
+            INSERT INTO monthly_obligations (month, category, opening_debt, closing_debt, planned_budget, comment, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(month, category) DO UPDATE SET
+                opening_debt=excluded.opening_debt,
+                closing_debt=excluded.closing_debt,
+                planned_budget=excluded.planned_budget,
+                comment=excluded.comment,
+                updated_at=excluded.updated_at
+        """, (month, category, opening_debt, closing_debt, planned_budget, comment))
+        conn.commit()
