@@ -912,6 +912,25 @@ def sync_status(_: str = Depends(verify_admin)):
         "sync_time": f"{SYNC_HOUR:02d}:{SYNC_MINUTE:02d} МСК",
     }
 
+@app.post("/api/upload-db")
+async def upload_db(request: Request, x_api_key: str = Header(None)):
+    """Принимает бинарный файл БД и сохраняет как novator.db"""
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    import os, shutil
+    db_path = os.path.join(os.path.dirname(__file__), "data", "novator.db")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    body = await request.body()
+    if len(body) < 1000:
+        raise HTTPException(status_code=400, detail="Файл слишком маленький")
+    backup_path = db_path + ".bak"
+    if os.path.exists(db_path):
+        shutil.copy2(db_path, backup_path)
+    with open(db_path, "wb") as f:
+        f.write(body)
+    return {"status": "ok", "size": len(body), "path": db_path}
+
+
 @app.get("/")
 def root():
     return {"service": "Новатор Платёжный мониторинг", "status": "ok",
