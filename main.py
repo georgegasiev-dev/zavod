@@ -915,18 +915,18 @@ def sync_status(_: str = Depends(verify_admin)):
 @app.post("/api/upload-db")
 async def upload_db(request: Request):
     """Принимает бинарный файл БД и сохраняет как novator.db"""
-    x_api_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Forbidden")
     import os, shutil
+    api_key = os.environ.get("API_KEY", "")
+    x_api_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key") or ""
+    if not api_key or x_api_key != api_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
     db_path = os.path.join(os.path.dirname(__file__), "data", "novator.db")
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     body = await request.body()
     if len(body) < 1000:
         raise HTTPException(status_code=400, detail="Файл слишком маленький")
-    backup_path = db_path + ".bak"
     if os.path.exists(db_path):
-        shutil.copy2(db_path, backup_path)
+        shutil.copy2(db_path, db_path + ".bak")
     with open(db_path, "wb") as f:
         f.write(body)
     return {"status": "ok", "size": len(body), "path": db_path}
