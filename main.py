@@ -98,6 +98,16 @@ async def scheduled_tg_weekly_summary():
         log.error("Ошибка еженедельного отчёта: %s", e)
 
 
+async def scheduled_fssp_check():
+    """Еженедельная проверка ФССП (пт 9:00) — новые исполнительные производства."""
+    log.info("⚖️ Проверка ФССП...")
+    try:
+        from fssp_monitor import check_fssp
+        check_fssp()
+    except Exception as e:
+        log.error("Ошибка ФССП-монитора: %s", e)
+
+
 async def scheduled_sunday_sync():
     """Автосинхронизация выписки каждое воскресенье в 23:50 МСК."""
     log.info("📥 Воскресная синхронизация выписки Raiffeisen...")
@@ -356,6 +366,9 @@ async def lifespan(app: FastAPI):
     # Синхронизация выписки в воскресенье 23:50 МСК — для актуального баланса в недельном отчёте
     scheduler.add_job(scheduled_sunday_sync, CronTrigger(day_of_week="sun", hour=23, minute=50),
                       id="sunday_sync", replace_existing=True)
+    # ФССП: проверка новых исполнительных производств по ИНН — по пятницам в 9:00 МСК
+    scheduler.add_job(scheduled_fssp_check, CronTrigger(day_of_week="fri", hour=9, minute=0),
+                      id="fssp_check", replace_existing=True)
     # ЕОВР: опрос Google Sheets в 9:00, 10:00, 11:00, 18:00 МСК
     for _h in (9, 10, 11, 18):
         scheduler.add_job(scheduled_eovr_sync, CronTrigger(hour=_h, minute=0),

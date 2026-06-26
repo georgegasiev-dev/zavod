@@ -39,9 +39,29 @@ def _init():
                 value TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS fssp_seen (
+                process_title TEXT PRIMARY KEY,
+                first_seen    TEXT NOT NULL
+            )
+        """)  # ponytail: только номер ИП + дата; больше ничего не нужно
         conn.commit()
 
 _init()
+
+
+def fssp_get_seen() -> set:
+    with _conn() as conn:
+        rows = conn.execute("SELECT process_title FROM fssp_seen").fetchall()
+        return {r["process_title"] for r in rows}
+
+def fssp_mark_seen(titles: list):
+    with _conn() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO fssp_seen (process_title, first_seen) VALUES (?, datetime('now'))",
+            [(t,) for t in titles]
+        )
+        conn.commit()
 
 
 def save_setting(key: str, value: str):
