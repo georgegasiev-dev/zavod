@@ -555,6 +555,22 @@ CAT_TO_PLAN_KEY = {
 
 
 
+
+@app.get("/api/logs")
+def get_logs(n: int = 100, _: str = Depends(verify_admin)):
+    """Возвращает последние N строк journald лога сервиса."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["journalctl", "-u", "zavod", f"-n", str(n), "--no-pager", "--output=short"],
+            capture_output=True, text=True, timeout=10
+        )
+        lines = result.stdout.strip().split("\n")
+        return {"lines": lines, "count": len(lines)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.get("/api/access-log")
 def get_access_log_endpoint(limit: int = 50, _: str = Depends(verify_admin)):
     """История доступа к системе."""
