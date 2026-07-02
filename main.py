@@ -322,11 +322,12 @@ async def _register_tg_webhook():
     """Регистрирует webhook в Telegram при старте."""
     import httpx
     tg_token = os.getenv("TG_TOKEN", "")
-    base_url = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
-    if not tg_token or not base_url:
-        log.info("TG_TOKEN или RAILWAY_PUBLIC_DOMAIN не заданы — webhook не зарегистрирован")
+    # WEBHOOK_DOMAIN — основной (Timeweb), RAILWAY_PUBLIC_DOMAIN — legacy fallback
+    domain = os.getenv("WEBHOOK_DOMAIN") or os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+    if not tg_token or not domain:
+        log.info("TG_TOKEN или WEBHOOK_DOMAIN не заданы — webhook не зарегистрирован")
         return
-    webhook_url = f"https://{base_url}/webhook/telegram"
+    webhook_url = f"https://{domain}/webhook/telegram"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.post(
@@ -366,6 +367,12 @@ async def lifespan(app: FastAPI):
     # Синхронизация выписки в воскресенье 23:50 МСК — для актуального баланса в недельном отчёте
     scheduler.add_job(scheduled_sunday_sync, CronTrigger(day_of_week="sun", hour=23, minute=50),
                       id="sunday_sync", replace_existing=True)
+    # Еженедельный бэкап БД — воскресенье 22:00 МСК
+    scheduler.add_job(scheduled_db_backup, CronTrigger(day_of_week="sun", hour=22, minute=0),
+                      id="db_backup", replace_existing=True)
+    # Обновление токена Raiffeisen — каждые 25 дней
+    scheduler.add_job(scheduled_raiffeisen_token_refresh, CronTrigger(day=1, hour=6, minute=0),
+                      id="raiffeisen_token_refresh", replace_existing=True)
     # ФССП: проверка новых исполнительных производств по ИНН — по пятницам в 9:00 МСК
     scheduler.add_job(scheduled_fssp_check, CronTrigger(day_of_week="fri", hour=9, minute=0),
                       id="fssp_check", replace_existing=True)
