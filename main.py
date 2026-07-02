@@ -351,6 +351,44 @@ REPORT_HOUR   = int(os.getenv("REPORT_HOUR",   "10"))
 REPORT_MINUTE = int(os.getenv("REPORT_MINUTE", "30"))
 
 @asynccontextmanager
+async def scheduled_db_backup():
+    """Еженедельный бэкап БД — отправляет файл владельцу в Telegram."""
+    tg_token  = os.getenv("TG_TOKEN", "")
+    owner_cid = os.getenv("TG_CHAT_ID", "")
+    db_path   = os.getenv("DB_PATH", "data/novator.db")
+    if not tg_token or not owner_cid:
+        return
+    try:
+        import httpx
+        from datetime import datetime
+        filename = f"novator_backup_{datetime.now().strftime('%Y%m%d')}.db"
+        with open(db_path, "rb") as f:
+            db_bytes = f.read()
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"https://api.telegram.org/bot{tg_token}/sendDocument",
+                data={"chat_id": owner_cid, "caption": f"💾 Бэкап БД Новатор · {datetime.now().strftime('%d.%m.%Y')}"},
+                files={"document": (filename, db_bytes, "application/octet-stream")}
+            )
+            if r.json().get("ok"):
+                log.info("Бэкап БД отправлен в Telegram")
+            else:
+                log.warning("Ошибка отправки бэкапа: %s", r.json())
+    except Exception as e:
+        log.error("Ошибка бэкапа БД: %s", e)
+
+
+async def scheduled_raiffeisen_token_refresh():
+    """Обновляет Raiffeisen refresh token раз в 25 дней."""
+    try:
+        from raiffeisen_api import get_valid_tokens
+        get_valid_tokens()
+        log.info("Raiffeisen токен проверен/обновлён")
+    except Exception as e:
+        log.error("Ошибка обновления токена Raiffeisen: %s", e)
+
+
+
 async def lifespan(app: FastAPI):
     scheduler.add_job(scheduled_gmail_sync, IntervalTrigger(minutes=30),
                       id="gmail_sync", replace_existing=True)
