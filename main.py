@@ -783,6 +783,20 @@ async def tg_webhook(request: Request):
     elif cmd in ("/myid", "myid"):
         await reply(f"Ваш Telegram ID: <code>{chat_id}</code>")
 
+    elif cmd in ("/logs", "logs") and chat_id == owner_id:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["journalctl", "-u", "zavod", "-n", "40", "--no-pager", "--output=short"],
+                capture_output=True, text=True, timeout=10
+            )
+            lines = result.stdout.strip().split("\n")
+            # Берём последние 30 строк и обрезаем длинные
+            short = "\n".join(l[-120:] for l in lines[-30:])
+            await reply(f"<pre>{short}</pre>")
+        except Exception as e:
+            await reply(f"❌ Ошибка: {e}")
+
     elif text.lower().startswith("/sub"):
         # Только владелец управляет рассылкой
         if chat_id != owner_id:
