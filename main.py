@@ -683,7 +683,8 @@ async def tg_webhook(request: Request):
                     json={"chat_id": chat_id, "text": txt, "parse_mode": "HTML"}
                 )
         except Exception as e:
-            log.error("Ошибка ответа в Telegram: %s", e)
+            import traceback
+            log.error("Ошибка ответа в Telegram: %s\n%s", e, traceback.format_exc())
 
     # Владелец всегда имеет доступ, остальные — через пароль
     bot_password = os.getenv("TG_BOT_PASSWORD", "")
