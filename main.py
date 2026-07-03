@@ -33,14 +33,14 @@ log = logging.getLogger("main")
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
 async def scheduled_gmail_sync():
-    """Запускается по расписанию — тянет выписку из Gmail или Raiffeisen API."""
+    """Запускается по расписанию — тянет выписку из Raiffeisen API в отдельном потоке."""
     from raiffeisen_api import load_token, CLIENT_ID
-    # Если настроен Raiffeisen API — используем его, иначе Gmail
     if CLIENT_ID and load_token():
         log.info("⏰ Синхронизация через Raiffeisen API...")
         try:
             from raiffeisen_api import fetch_and_load
-            result = fetch_and_load()
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, fetch_and_load)
             log.info("Raiffeisen sync: %s", result)
         except Exception as e:
             log.error("Ошибка Raiffeisen sync: %s", e)
@@ -48,18 +48,20 @@ async def scheduled_gmail_sync():
         log.info("⏰ Синхронизация через Gmail...")
         try:
             from gmail_fetcher import fetch_and_upload
-            result = fetch_and_upload()
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, fetch_and_upload)
             log.info("Gmail sync: %s", result)
         except Exception as e:
             log.error("Ошибка Gmail sync: %s", e)
 
 async def _sync_before_report():
-    """Синхронизирует выписку перед отправкой отчёта."""
+    """Синхронизирует выписку перед отправкой отчёта (в отдельном потоке)."""
     try:
         from raiffeisen_api import fetch_and_load, load_token, CLIENT_ID
         if CLIENT_ID and load_token():
             log.info("🔄 Синхронизация выписки перед отчётом...")
-            result = fetch_and_load()
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, fetch_and_load)
             log.info("Pre-report sync: ops=%s", result.get("ops_saved", "?"))
     except Exception as e:
         log.error("Ошибка синхронизации перед отчётом: %s", e)
