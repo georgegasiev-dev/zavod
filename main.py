@@ -320,29 +320,83 @@ async def scheduled_eovr_sync():
     log.info("⏰ ЕОВР: плановый опрос Google Sheets")
     await sync_eovr_current()
 
-async def _register_tg_webhook():
-    """Регистрирует webhook в Telegram при старте."""
+async def _process_tg_message(msg: dict):
+    """Обрабатывает одно входящее сообщение от Telegram (используется в polling)."""
     import httpx
     tg_token = os.getenv("TG_TOKEN", "")
-    # WEBHOOK_DOMAIN — основной (Timeweb), RAILWAY_PUBLIC_DOMAIN — legacy fallback
-    domain = os.getenv("WEBHOOK_DOMAIN") or os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
-    if not tg_token or not domain:
-        log.info("TG_TOKEN или WEBHOOK_DOMAIN не заданы — webhook не зарегистрирован")
+    tg_chat  = os.getenv("TG_CHAT_ID", "")
+    if not tg_token:
         return
-    webhook_url = f"https://{domain}/webhook/telegram"
+
+    chat_id = str(msg.get("chat", {}).get("id", ""))
+    text    = (msg.get("text") or "").strip()
+
+    async def reply(txt: str):
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                await client.post(
+                    f"https://api.telegram.org/bot{tg_token}/sendMessage",
+                    json={"chat_id": chat_id, "text": txt, "parse_mode": "HTML"}
+                )
+        except Exception as e:
+            import traceback
+            log.error("Ошибка ответа в Telegram: %s\n%s", e, traceback.format_exc())
+
+    # Передаём управление основному обработчику webhook
+    await _handle_tg_message(chat_id, text, tg_chat, tg_token, reply)
+
+
+async def _start_tg_polling():
+    """Запускает polling — опрос Telegram каждые 2 сек вместо webhook."""
+    import httpx
+    tg_token = os.getenv("TG_TOKEN", "")
+    if not tg_token:
+        log.info("TG_TOKEN не задан — polling не запущен")
+        return
+
+    # Сначала удаляем webhook если был
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(
-                f"https://api.telegram.org/bot{tg_token}/setWebhook",
-                json={"url": webhook_url, "allowed_updates": ["message"]}
+            await client.post(
+                f"https://api.telegram.org/bot{tg_token}/deleteWebhook",
+                json={"drop_pending_updates": True}
             )
-            data = r.json()
-            if data.get("ok"):
-                log.info("Telegram webhook зарегистрирован: %s", webhook_url)
-            else:
-                log.warning("Webhook не зарегистрирован: %s", data)
+            log.info("Webhook удалён, запускаем polling...")
     except Exception as e:
-        log.error("Ошибка регистрации webhook: %s", e)
+        log.warning("Не удалось удалить webhook: %s", e)
+
+    offset = 0
+    log.info("🤖 Telegram polling запущен")
+
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.get(
+                    f"https://api.telegram.org/bot{tg_token}/getUpdates",
+                    params={"offset": offset, "timeout": 20, "allowed_updates": ["message"]}
+                )
+                data = r.json()
+                if not data.get("ok"):
+                    await asyncio.sleep(5)
+                    continue
+
+                for update in data.get("result", []):
+                    offset = update["update_id"] + 1
+                    msg = update.get("message", {})
+                    if msg:
+                        asyncio.create_task(_process_tg_message(msg))
+
+        except asyncio.CancelledError:
+            log.info("Polling остановлен")
+            break
+        except Exception as e:
+            log.error("Ошибка polling: %s", e)
+            await asyncio.sleep(5)
+
+
+async def _register_tg_webhook():
+    """Legacy — теперь используем polling вместо webhook."""
+    pass
 
 # Время синхронизации: каждый день в 10:00 по Москве
 # Настраивается через переменную SYNC_HOUR (по умолчанию 10)
@@ -423,7 +477,8 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     log.info("Scheduler started. Gmail sync %02d:%02d, TG report %02d:%02d МСК.",
              SYNC_HOUR, SYNC_MINUTE, REPORT_HOUR, REPORT_MINUTE)
-    await _register_tg_webhook()
+    # Запускаем polling вместо webhook (webhook не работает из-за блокировок РФ)
+    asyncio.create_task(_start_tg_polling())
     yield
     scheduler.shutdown()
 
@@ -661,16 +716,14 @@ async def manual_report(_: str = Depends(verify_admin)):
 
 @app.post("/webhook/telegram")
 async def tg_webhook(request: Request):
-    """Обрабатывает входящие сообщения от Telegram."""
+    """Webhook endpoint — оставляем для совместимости, основная логика в _handle_tg_message."""
     import httpx
     tg_token = os.getenv("TG_TOKEN", "")
     tg_chat  = os.getenv("TG_CHAT_ID", "")
-
     try:
         body = await request.json()
     except Exception:
         return {"ok": True}
-
     msg     = body.get("message", {})
     chat_id = str(msg.get("chat", {}).get("id", ""))
     text    = (msg.get("text") or "").strip()
@@ -686,6 +739,13 @@ async def tg_webhook(request: Request):
             import traceback
             log.error("Ошибка ответа в Telegram: %s\n%s", e, traceback.format_exc())
 
+    await _handle_tg_message(chat_id, text, tg_chat, tg_token, reply)
+    return {"ok": True}
+
+
+async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: str, reply):
+    """Основная логика обработки сообщений Telegram (используется в webhook и polling)."""
+    """Основная логика обработки сообщений Telegram (используется в webhook и polling)."""
     # Владелец всегда имеет доступ, остальные — через пароль
     bot_password = os.getenv("TG_BOT_PASSWORD", "")
     allowed_ids  = get_allowed_users()
