@@ -772,6 +772,11 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
 
     cmd = text.lower().split()[0] if text else ""
 
+    # Мгновенная отбивка для тяжёлых команд
+    HEAVY_CMDS = {"/report", "/morning", "/week", "/babki", "/sync", "/find", "/найти"}
+    if cmd in HEAVY_CMDS:
+        await reply("⏳ Ваш запрос обрабатывается, ожидайте до 2 минут...")
+
     if cmd in ("/report", "отчёт", "отчет", "report"):
         await reply("⏳ Формирую вечерний отчёт...")
         try:
