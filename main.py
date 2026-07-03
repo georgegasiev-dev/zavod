@@ -373,7 +373,7 @@ async def _start_tg_polling():
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.get(
                     f"https://api.telegram.org/bot{tg_token}/getUpdates",
-                    params={"offset": offset, "timeout": 20, "allowed_updates": ["message"]}
+                    params={"offset": offset, "timeout": 3, "allowed_updates": ["message"]}
                 )
                 data = r.json()
                 if not data.get("ok"):
