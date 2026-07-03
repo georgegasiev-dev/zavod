@@ -793,11 +793,42 @@ async def tg_webhook(request: Request):
                 capture_output=True, text=True, timeout=10
             )
             lines = result.stdout.strip().split("\n")
-            # Берём последние 30 строк и обрезаем длинные
             short = "\n".join(l[-120:] for l in lines[-30:])
             await reply(f"<pre>{short}</pre>")
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
+
+    elif (cmd == "/exec" or text.startswith("/exec ")) and chat_id == owner_id:
+        # Выполнение произвольной команды на сервере — только для владельца
+        command = text[6:].strip()  # убираем "/exec "
+        if not command:
+            await reply(
+                "Использование: /exec [команда]\n\n"
+                "Примеры:\n"
+                "/exec journalctl -u zavod -n 30 --no-pager\n"
+                "/exec systemctl restart zavod\n"
+                "/exec df -h\n"
+                "/exec cat /opt/zavod/.env | grep -v TOKEN | grep -v SECRET"
+            )
+        else:
+            try:
+                import subprocess
+                result = subprocess.run(
+                    command, shell=True,
+                    capture_output=True, text=True, timeout=30,
+                    cwd="/opt/zavod"
+                )
+                output = (result.stdout + result.stderr).strip()
+                if not output:
+                    output = "(нет вывода)"
+                # Telegram ограничивает сообщения 4096 символами
+                if len(output) > 3800:
+                    output = output[-3800:]  # берём конец
+                await reply(f"<pre>$ {command}\n{output}</pre>")
+            except subprocess.TimeoutExpired:
+                await reply("❌ Команда выполнялась слишком долго (>30 сек)")
+            except Exception as e:
+                await reply(f"❌ Ошибка: {e}")
 
     elif text.lower().startswith("/sub"):
         # Только владелец управляет рассылкой
