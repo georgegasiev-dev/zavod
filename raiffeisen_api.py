@@ -276,8 +276,9 @@ def fetch_statements(date_from: str = None, date_to: str = None) -> bytes:
     """Запрашивает, ждёт и скачивает Excel-выписку. Возвращает байты файла."""
     if not date_from and not date_to:
         # Берём последние 40 дней чтобы всегда иметь полные данные за текущий и прошлый месяц
-        today_dt  = _dt.date.today()
-        date_from = (today_dt - _dt.timedelta(days=40)).strftime("%Y-%m-%d")
+        from datetime import date, timedelta as td
+        today_dt  = date.today()
+        date_from = (today_dt - td(days=40)).strftime("%Y-%m-%d")
         date_to   = today_dt.strftime("%Y-%m-%d")
         log.info("Период не задан — берём последние 40 дней: %s … %s", date_from, date_to)
     elif not date_from:
