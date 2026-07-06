@@ -90,7 +90,7 @@ async def scheduled_tg_evening_report():
 
 
 async def scheduled_tg_weekly_summary():
-    """Еженедельный отчёт (пн 7:45) — итоги прошлой недели."""
+    """Еженедельный отчёт (пн 8:00) — итоги прошлой недели."""
     log.info("📨 Еженедельный отчёт в Telegram...")
     await _sync_before_report()
     try:
@@ -455,8 +455,8 @@ async def lifespan(app: FastAPI):
     EVENING_MINUTE = int(os.getenv("EVENING_MINUTE", "30"))
     scheduler.add_job(scheduled_tg_evening_report, CronTrigger(hour=EVENING_HOUR, minute=EVENING_MINUTE),
                       id="tg_evening_report", replace_existing=True)
-    # Еженедельный отчёт — каждый понедельник в 7:45 МСК
-    scheduler.add_job(scheduled_tg_weekly_summary, CronTrigger(day_of_week="mon", hour=7, minute=45),
+    # Еженедельный отчёт — каждый понедельник в 8:00 МСК
+    scheduler.add_job(scheduled_tg_weekly_summary, CronTrigger(day_of_week="mon", hour=8, minute=0),
                       id="tg_weekly_summary", replace_existing=True)
     # Синхронизация выписки в воскресенье 23:50 МСК — для актуального баланса в недельном отчёте
     scheduler.add_job(scheduled_sunday_sync, CronTrigger(day_of_week="sun", hour=23, minute=50),
