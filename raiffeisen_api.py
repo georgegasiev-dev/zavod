@@ -275,8 +275,11 @@ def _current_week_range() -> tuple[str, str]:
 def fetch_statements(date_from: str = None, date_to: str = None) -> bytes:
     """Запрашивает, ждёт и скачивает Excel-выписку. Возвращает байты файла."""
     if not date_from and not date_to:
-        date_from, date_to = _current_week_range()
-        log.info("Период не задан — берём текущую неделю: %s … %s", date_from, date_to)
+        # Берём последние 40 дней чтобы всегда иметь полные данные за текущий и прошлый месяц
+        today_dt  = _dt.date.today()
+        date_from = (today_dt - _dt.timedelta(days=40)).strftime("%Y-%m-%d")
+        date_to   = today_dt.strftime("%Y-%m-%d")
+        log.info("Период не задан — берём последние 40 дней: %s … %s", date_from, date_to)
     elif not date_from:
         date_from = _normalize_date(date_to)
     elif not date_to:
