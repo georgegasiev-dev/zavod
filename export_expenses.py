@@ -16,7 +16,7 @@ conn.row_factory = sqlite3.Row
 report = {"months": {}, "prochee_ops": [], "other_review_ops": []}
 
 # Категории, по которым точно нужна ручная ревизия назначений
-REVIEW_CATS = {'Прочее', 'Прочие нераспознанные'}
+REVIEW_CATS = {'Прочее', 'Прочие нераспознанные', 'Перевозчик'}
 
 for month in MONTHS_2026:
     row = conn.execute("SELECT data FROM month_data WHERE month=?", (month,)).fetchone()
