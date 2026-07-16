@@ -90,7 +90,7 @@ async def scheduled_tg_evening_report():
 
 
 async def scheduled_tg_weekly_summary():
-    """Еженедельный отчёт (пн 8:00) — итоги прошлой недели."""
+    """Еженедельный отчёт (пн 7:45) — итоги прошлой недели."""
     log.info("📨 Еженедельный отчёт в Telegram...")
     await _sync_before_report()
     try:
@@ -455,8 +455,8 @@ async def lifespan(app: FastAPI):
     EVENING_MINUTE = int(os.getenv("EVENING_MINUTE", "30"))
     scheduler.add_job(scheduled_tg_evening_report, CronTrigger(hour=EVENING_HOUR, minute=EVENING_MINUTE),
                       id="tg_evening_report", replace_existing=True)
-    # Еженедельный отчёт — каждый понедельник в 8:00 МСК
-    scheduler.add_job(scheduled_tg_weekly_summary, CronTrigger(day_of_week="mon", hour=8, minute=0),
+    # Еженедельный отчёт — каждый понедельник в 7:45 МСК
+    scheduler.add_job(scheduled_tg_weekly_summary, CronTrigger(day_of_week="mon", hour=7, minute=45),
                       id="tg_weekly_summary", replace_existing=True)
     # Синхронизация выписки в воскресенье 23:50 МСК — для актуального баланса в недельном отчёте
     scheduler.add_job(scheduled_sunday_sync, CronTrigger(day_of_week="sun", hour=23, minute=50),
@@ -1571,6 +1571,71 @@ async def raiffeisen_auth_status(_: str = Depends(verify_admin)):
         "expires_at":  expires_at.isoformat(),
         "has_refresh": bool(token.get("refresh_token")),
     }
+
+
+import hmac, hashlib, subprocess
+
+GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "")
+
+def _verify_github_signature(secret: str, payload_body: bytes, signature_header: str) -> bool:
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+    expected = "sha256=" + hmac.new(secret.encode(), payload_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature_header)
+
+
+@app.post("/webhook/github")
+async def github_webhook(request: Request):
+    """
+    Автодеплой: GitHub при push в main дёргает этот эндпоинт →
+    git pull + systemctl restart zavod.service (детач, чтобы рестарт
+    не оборвал сам себя на середине).
+    """
+    body = await request.body()
+    sig = request.headers.get("x-hub-signature-256", "")
+
+    if not GITHUB_WEBHOOK_SECRET:
+        logging.warning("[webhook] GITHUB_WEBHOOK_SECRET не задан в .env — вебхук отключён")
+        raise HTTPException(status_code=503, detail="webhook not configured")
+
+    if not _verify_github_signature(GITHUB_WEBHOOK_SECRET, body, sig):
+        logging.warning("[webhook] Неверная подпись запроса — игнорирую")
+        raise HTTPException(status_code=401, detail="invalid signature")
+
+    event = request.headers.get("x-github-event", "")
+    if event == "ping":
+        return {"status": "pong"}
+
+    try:
+        payload = json.loads(body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="bad payload")
+
+    ref = payload.get("ref", "")
+    if event != "push" or ref not in ("refs/heads/main", "refs/heads/master"):
+        return {"status": "ignored", "ref": ref, "event": event}
+
+    repo_dir = os.path.dirname(os.path.abspath(__file__))
+    logging.info(f"[webhook] Push в {ref} — деплою из {repo_dir}")
+
+    pull = subprocess.run(
+        ["git", "-C", repo_dir, "pull", "--ff-only"],
+        capture_output=True, text=True, timeout=60,
+    )
+    logging.info(f"[webhook] git pull: {pull.stdout} {pull.stderr}")
+
+    if pull.returncode != 0:
+        return JSONResponse(status_code=500, content={
+            "status": "pull_failed", "stdout": pull.stdout, "stderr": pull.stderr,
+        })
+
+    # Рестарт в новой сессии — чтобы SIGTERM текущему процессу не убил сам systemctl-вызов
+    subprocess.Popen(
+        ["systemctl", "restart", "zavod.service"],
+        start_new_session=True,
+    )
+
+    return {"status": "ok", "pulled": pull.stdout.strip()}
 
 
 @app.post("/api/cleanup")
