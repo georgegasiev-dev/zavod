@@ -556,6 +556,7 @@ def _init_obligations():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS monthly_obligations (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                year       INTEGER NOT NULL DEFAULT 2026,
                 month      TEXT NOT NULL,
                 category   TEXT NOT NULL,
                 opening_debt  REAL DEFAULT 0,
@@ -563,36 +564,63 @@ def _init_obligations():
                 planned_budget REAL DEFAULT 0,
                 comment    TEXT DEFAULT '',
                 updated_at TEXT,
-                UNIQUE(month, category)
+                UNIQUE(year, month, category)
             )
         """)
+        # Миграция со старой схемы (без year, UNIQUE был только (month, category)).
+        # SQLite не умеет менять UNIQUE-констрейнт на лету — пересоздаём таблицу.
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(monthly_obligations)").fetchall()]
+        if 'year' not in cols:
+            conn.execute("ALTER TABLE monthly_obligations RENAME TO monthly_obligations_old")
+            conn.execute("""
+                CREATE TABLE monthly_obligations (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    year       INTEGER NOT NULL DEFAULT 2026,
+                    month      TEXT NOT NULL,
+                    category   TEXT NOT NULL,
+                    opening_debt  REAL DEFAULT 0,
+                    closing_debt  REAL DEFAULT 0,
+                    planned_budget REAL DEFAULT 0,
+                    comment    TEXT DEFAULT '',
+                    updated_at TEXT,
+                    UNIQUE(year, month, category)
+                )
+            """)
+            # Старые записи (если были) — все относились к 2026 году, других не вели.
+            conn.execute("""
+                INSERT INTO monthly_obligations
+                    (year, month, category, opening_debt, closing_debt, planned_budget, comment, updated_at)
+                SELECT 2026, month, category, opening_debt, closing_debt, planned_budget, comment, updated_at
+                FROM monthly_obligations_old
+            """)
+            conn.execute("DROP TABLE monthly_obligations_old")
         conn.commit()
 
 _init_obligations()
 
 
-def get_obligations(month: str) -> list:
-    """Возвращает обязательства для месяца."""
+def get_obligations(year: int, month: str) -> list:
+    """Возвращает обязательства для месяца конкретного года."""
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM monthly_obligations WHERE month=? ORDER BY id",
-            (month,)
+            "SELECT * FROM monthly_obligations WHERE year=? AND month=? ORDER BY id",
+            (year, month)
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-def save_obligation(month: str, category: str, opening_debt: float,
+def save_obligation(year: int, month: str, category: str, opening_debt: float,
                     closing_debt: float, planned_budget: float, comment: str):
-    """Сохраняет/обновляет строку обязательств."""
+    """Сохраняет/обновляет строку обязательств для (год, месяц, категория)."""
     with _conn() as conn:
         conn.execute("""
-            INSERT INTO monthly_obligations (month, category, opening_debt, closing_debt, planned_budget, comment, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-            ON CONFLICT(month, category) DO UPDATE SET
+            INSERT INTO monthly_obligations (year, month, category, opening_debt, closing_debt, planned_budget, comment, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(year, month, category) DO UPDATE SET
                 opening_debt=excluded.opening_debt,
                 closing_debt=excluded.closing_debt,
                 planned_budget=excluded.planned_budget,
                 comment=excluded.comment,
                 updated_at=excluded.updated_at
-        """, (month, category, opening_debt, closing_debt, planned_budget, comment))
+        """, (year, month, category, opening_debt, closing_debt, planned_budget, comment))
         conn.commit()

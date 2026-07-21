@@ -675,25 +675,26 @@ async def save_plan_endpoint(request: Request):
 
 
 @app.get("/api/obligations")
-def get_obligations_endpoint(month: str = "Июнь"):
-    return {"month": month, "obligations": get_obligations(month)}
+def get_obligations_endpoint(month: str = "Июнь", year: int = 2026):
+    return {"year": year, "month": month, "obligations": get_obligations(year, month)}
 
 
 @app.post("/api/obligations")
 async def save_obligation_endpoint(request: Request):
     body = await request.json()
+    year     = int(body.get("year", 2026) or 2026)
     month    = body.get("month", "Июнь")
     category = body.get("category", "")
     if not category:
         return {"error": "category required"}
     save_obligation(
-        month, category,
+        year, month, category,
         float(body.get("opening_debt", 0) or 0),
         float(body.get("closing_debt", 0) or 0),
         float(body.get("planned_budget", 0) or 0),
         str(body.get("comment", "") or "")
     )
-    return {"status": "ok", "month": month, "category": category}
+    return {"status": "ok", "year": year, "month": month, "category": category}
 
 @app.get("/api/status")
 def get_status():
