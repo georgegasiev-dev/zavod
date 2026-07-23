@@ -11,6 +11,13 @@ from datetime import datetime
 
 from competitor_parsers import merani, prom23
 
+# Карта (сайт, название позиции) -> прямая ссылка на карточку товара, для кликабельных ссылок на фронтенде
+_URL_MAP = {}
+for _name, _url in merani.SKU_PAGES:
+    _URL_MAP[("merani.ru", _name)] = _url
+for _name, _url in prom23.SKU_PAGES:
+    _URL_MAP[("prom23.ru", _name)] = _url
+
 DB_PATH = Path(__file__).parent / "competitor_prices.sqlite3"
 
 SCHEMA = """
@@ -86,6 +93,7 @@ def get_price_history() -> dict:
         positions.append({
             "site": site,
             "variant": variant,
+            "url": _URL_MAP.get((site, variant)),
             "days": days,  # {"2026-07-23": {"price": 2744, "in_stock": None}, ...}
         })
     return {"positions": positions}
