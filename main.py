@@ -774,7 +774,7 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
     cmd = text.lower().split()[0] if text else ""
 
     # Мгновенная отбивка для тяжёлых команд
-    HEAVY_CMDS = {"/report", "/morning", "/week", "/babki", "/sync", "/find", "/найти"}
+    HEAVY_CMDS = {"/report", "/morning", "/week", "/babki", "/sync", "/find", "/найти", "/rynok"}
     if cmd in HEAVY_CMDS:
         await reply("⏳ Ваш запрос обрабатывается, ожидайте до 2 минут...")
 
@@ -951,6 +951,14 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
+    elif cmd in ("/rynok", "рынок"):
+        await reply("⏳ Собираю цены конкурентов, до 30 секунд...")
+        try:
+            from competitor_prices import build_rynok_report
+            await reply(build_rynok_report())
+        except Exception as e:
+            await reply(f"❌ Ошибка: {e}")
+
     elif cmd in ("/week", "/неделя", "неделя"):
         await reply("⏳ Формирую недельный отчёт...")
         try:
@@ -1060,7 +1068,8 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
             "/week — отчёт за прошлую неделю\n"
             "/find [запрос] — поиск по операциям\n"
             "/sync — загрузить выписку из Raiffeisen\n"
-            "/status — состояние базы данных\n\n"
+            "/status — состояние базы данных\n"
+            "/rynok — цены конкурентов на фанеру (18мм 2440x1220)\n\n"
             "<b>Производство (ЕОВР):</b>\n"
             "/eovr — выработка текущего месяца с детализацией по дням\n"
             "/eovr 5 — выработка за конкретный месяц (номер)\n"
