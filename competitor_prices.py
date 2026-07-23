@@ -63,6 +63,51 @@ def _collect_rows() -> list[dict]:
     return rows
 
 
+def get_price_history() -> dict:
+    """
+    Возвращает историю цен конкурентов по дням для таблицы на сайте.
+    Для каждого (site, variant) берём последнюю цену за каждый календарный день.
+    """
+    conn = _get_conn()
+    cur = conn.execute("""
+        SELECT site, variant, price_per_sheet, in_stock, parsed_at
+        FROM competitor_prices
+        ORDER BY site, variant, parsed_at ASC
+    """)
+    by_day: dict[tuple, dict[str, dict]] = {}
+    for site, variant, price, in_stock, parsed_at in cur.fetchall():
+        day = parsed_at[:10]  # YYYY-MM-DD
+        key = (site, variant)
+        by_day.setdefault(key, {})[day] = {"price": price, "in_stock": in_stock}
+    conn.close()
+
+    positions = []
+    for (site, variant), days in sorted(by_day.items()):
+        positions.append({
+            "site": site,
+            "variant": variant,
+            "days": days,  # {"2026-07-23": {"price": 2744, "in_stock": None}, ...}
+        })
+    return {"positions": positions}
+
+
+def collect_and_save() -> int:
+    """Собирает цены со всех сайтов и сохраняет в БД. Возвращает число сохранённых строк.
+    Используется и планировщиком, и командой /rynok (через build_rynok_report)."""
+    conn = _get_conn()
+    rows = _collect_rows()
+    valid_rows = [r for r in rows if r["price_per_sheet"] is not None]
+    if valid_rows:
+        conn.executemany(
+            """INSERT INTO competitor_prices (site, variant, price_per_sheet, in_stock, parsed_at)
+               VALUES (:site, :variant, :price_per_sheet, :in_stock, :parsed_at)""",
+            valid_rows,
+        )
+        conn.commit()
+    conn.close()
+    return len(valid_rows)
+
+
 def build_rynok_report() -> str:
     conn = _get_conn()
     rows = _collect_rows()

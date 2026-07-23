@@ -121,6 +121,17 @@ async def scheduled_sunday_sync():
         log.error("Ошибка воскресной синхронизации: %s", e)
 
 
+async def scheduled_competitor_prices():
+    """Ежедневный автосбор цен конкурентов (8:15 МСК) — для таблицы 'Ситуация на рынке'."""
+    log.info("📊 Сбор цен конкурентов...")
+    try:
+        from competitor_prices import collect_and_save
+        n = collect_and_save()
+        log.info("Собрано позиций конкурентов: %s", n)
+    except Exception as e:
+        log.error("Ошибка сбора цен конкурентов: %s", e)
+
+
 # ─── ЕОВР: парсер Google Sheets ────────────────────────────────────────────
 
 EOVR_SHEET_ID = "1iYEuupLfhvM-jS4D8NiaL2dcnoUheu1GRPy5UJc9yUg"
@@ -461,6 +472,9 @@ async def lifespan(app: FastAPI):
     # Синхронизация выписки в воскресенье 23:50 МСК — для актуального баланса в недельном отчёте
     scheduler.add_job(scheduled_sunday_sync, CronTrigger(day_of_week="sun", hour=23, minute=50),
                       id="sunday_sync", replace_existing=True)
+    # Автосбор цен конкурентов — каждый день в 8:15 МСК (для таблицы "Ситуация на рынке")
+    scheduler.add_job(scheduled_competitor_prices, CronTrigger(hour=8, minute=15),
+                      id="competitor_prices", replace_existing=True)
     # Еженедельный бэкап БД — воскресенье 22:00 МСК
     scheduler.add_job(scheduled_db_backup, CronTrigger(day_of_week="sun", hour=22, minute=0),
                       id="db_backup", replace_existing=True)
@@ -1120,6 +1134,12 @@ def eovr_year_endpoint(year: int):
     months = get_eovr_year(year)
     updated = get_eovr_latest_updated()
     return {"year": year, "months": months, "updated_at": updated}
+
+@app.get("/api/competitor-prices")
+def competitor_prices_endpoint():
+    """История цен конкурентов на фанеру по дням. Открытый эндпоинт (данные не финансовые)."""
+    from competitor_prices import get_price_history
+    return get_price_history()
 
 @app.get("/api/sync/status")
 def sync_status(_: str = Depends(verify_admin)):
