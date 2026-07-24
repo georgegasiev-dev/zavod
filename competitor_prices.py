@@ -8,6 +8,12 @@
 import sqlite3
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+MSK = ZoneInfo("Europe/Moscow")
+
+def _now() -> datetime:
+    return datetime.now(MSK)
 
 from competitor_parsers import merani, prom23
 
@@ -43,7 +49,7 @@ def _get_conn() -> sqlite3.Connection:
 
 def _collect_rows() -> list[dict]:
     rows = []
-    now = datetime.now().isoformat()
+    now = _now().isoformat()
 
     try:
         for r in merani.fetch_all():
@@ -116,6 +122,55 @@ def collect_and_save() -> int:
     return len(valid_rows)
 
 
+def collect_and_report_changes() -> str | None:
+    """
+    Для ежедневной автоматической проверки (планировщик).
+    Собирает свежие цены, сравнивает с последним известным значением по каждой позиции
+    и возвращает текст уведомления в Telegram, ТОЛЬКО если хоть одна цена изменилась.
+    Если изменений нет — возвращает None (уведомление не шлём, чтобы не спамить).
+    """
+    conn = _get_conn()
+
+    # Цена по каждой позиции до текущего сбора
+    prev_prices: dict[tuple, int] = {}
+    cur = conn.execute("""
+        SELECT site, variant, price_per_sheet FROM competitor_prices
+        WHERE id IN (SELECT MAX(id) FROM competitor_prices GROUP BY site, variant)
+    """)
+    for site, variant, price in cur.fetchall():
+        if price is not None:
+            prev_prices[(site, variant)] = price
+
+    rows = _collect_rows()
+    valid_rows = [r for r in rows if r["price_per_sheet"] is not None]
+    if valid_rows:
+        conn.executemany(
+            """INSERT INTO competitor_prices (site, variant, price_per_sheet, in_stock, parsed_at)
+               VALUES (:site, :variant, :price_per_sheet, :in_stock, :parsed_at)""",
+            valid_rows,
+        )
+        conn.commit()
+    conn.close()
+
+    changed_lines = []
+    for r in valid_rows:
+        key = (r["site"], r["variant"])
+        prev = prev_prices.get(key)
+        if prev is not None and prev != r["price_per_sheet"]:
+            diff = r["price_per_sheet"] - prev
+            arrow = f"↑ +{diff}₽" if diff > 0 else f"↓ {diff}₽"
+            changed_lines.append(f"  {r['site']} — {r['variant']}: {prev}₽ → {r['price_per_sheet']}₽ ({arrow})")
+
+    if not changed_lines:
+        return None
+
+    lines = [
+        "<b>📊 Изменение цен конкурентов</b>",
+        f"<i>{_now().strftime('%d.%m.%Y %H:%M')}</i>", "",
+    ] + changed_lines
+    return "\n".join(lines)
+
+
 def build_rynok_report() -> str:
     conn = _get_conn()
     rows = _collect_rows()
@@ -140,7 +195,7 @@ def build_rynok_report() -> str:
     conn.close()
 
     lines = [f"<b>📊 Рынок · цены конкурентов на 18мм 2440x1220</b>",
-              f"<i>{datetime.now().strftime('%d.%m.%Y %H:%M')}</i>", ""]
+              f"<i>{_now().strftime('%d.%m.%Y %H:%M')}</i>", ""]
 
     errored = [r for r in rows if r["price_per_sheet"] is None]
     by_site: dict[str, list] = {}
