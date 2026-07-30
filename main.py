@@ -1330,6 +1330,30 @@ async def reclassify_op(
 
 
 # ── справочник контрагентов ───────────────────────────────────────────────────
+@app.get("/api/contractor-ops")
+def get_contractor_ops(name: str = ""):
+    """
+    Все операции конкретного контрагента по всем месяцам — для карточки
+    контрагента в справочнике. Матчинг по нормализованному имени (lower+strip),
+    так же как /api/contractors и save_contractor_mapping.
+    """
+    from database import get_all_months
+    name_norm = (name or "").strip().lower()
+    if not name_norm:
+        return {"ops": []}
+
+    all_data = get_all_months()
+    result = []
+    for month, month_data in all_data.items():
+        for op in month_data.get('ops', []):
+            c = (op.get('contractor') or '').strip().lower()
+            if c == name_norm:
+                result.append({**op, "_month": month})
+
+    result.sort(key=lambda o: o.get('date', ''), reverse=True)
+    return {"ops": result}
+
+
 @app.get("/api/contractors")
 def get_contractors():
     """Полный справочник контрагентов с суммами из ops."""
