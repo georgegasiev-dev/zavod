@@ -132,13 +132,33 @@ def _short_contractor(name: str) -> str:
 
 
 def _month_income_total(month: str) -> float:
-    """Считает сумму всех поступлений за месяц."""
+    """Считает сумму поступлений строго с 1-го числа (календарный месяц)."""
     try:
         from database import get_month_data
+        from datetime import datetime as _dtt
         data = get_month_data(month)
         if not data or not data.get("ops"):
             return 0.0
-        return sum(op.get("amount", 0) for op in data["ops"] if not op.get("is_debit"))
+        # Находим номер месяца и год
+        now = _dtt.now()
+        # Ищем месяц по названию
+        month_names = {1:"Январь",2:"Февраль",3:"Март",4:"Апрель",5:"Май",6:"Июнь",
+                       7:"Июль",8:"Август",9:"Сентябрь",10:"Октябрь",11:"Ноябрь",12:"Декабрь"}
+        month_num = next((k for k, v in month_names.items() if v == month), now.month)
+        year = now.year
+        total = 0.0
+        for op in data["ops"]:
+            if op.get("is_debit"):
+                continue
+            date_str = op.get("date", "")
+            try:
+                op_dt = _dtt.strptime(date_str, "%d.%m.%Y")
+                # Только строго с 1-го числа по последний день месяца
+                if op_dt.month == month_num and op_dt.year == year and op_dt.day >= 1:
+                    total += op.get("amount", 0)
+            except ValueError:
+                continue
+        return total
     except Exception:
         return 0.0
 
@@ -559,8 +579,15 @@ def build_babki_report() -> str:
     data = get_month_data(month)
     ops  = data.get("ops", []) if data else []
 
-    # Поступления с начала месяца
-    month_income = sum(op.get("amount", 0) for op in ops if not op.get("is_debit"))
+    # Поступления с начала месяца — строго с 1-го числа (календарный месяц)
+    first_day = today.replace(day=1).strftime("%d.%m.%Y")[:2]  # "01"
+    month_num = today.month
+    month_income = sum(
+        op.get("amount", 0) for op in ops
+        if not op.get("is_debit")
+        and op.get("date", "").endswith(f".{month_num:02}.{today.year}")
+        and int(op.get("date", "01.")[0:2]) >= 1
+    )
 
     # Поступления с начала недели
     week_ops = [op for op in ops
