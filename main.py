@@ -528,12 +528,13 @@ def verify_admin(creds: HTTPBasicCredentials = Depends(security), request: Reque
                             headers={"WWW-Authenticate": "Basic"})
     ip = request.headers.get("x-forwarded-for", request.client.host if request and request.client else "—") if request else "—"
     log_access("login_ok", ip, f"Пользователь: {creds.username}")
-    _notify_login(f"🔑 <b>Вход в систему</b>\nПользователь: {creds.username}\nIP: {ip}", ip)
+    _notify_owner(f"🔑 <b>Вход в систему</b>\nПользователь: {creds.username}\nIP: {ip}")
     return creds.username
 
 # ── публичные эндпоинты ───────────────────────────────────────────────────────
 
-# Кэш для дедупликации уведомлений о входе: {ip: последнее_время}
+# Кэш для дедупликации уведомлений о НЕУДАЧНЫХ попытках входа: {ip: последнее_время}
+# (успешные входы уведомляются всегда, без дедупликации — см. verify_admin)
 _login_notify_cache: dict[str, datetime] = {}
 _LOGIN_DEDUP_SECONDS = 300  # 5 минут
 
@@ -557,7 +558,7 @@ def _notify_owner(text: str):
 
 
 def _notify_login(text: str, ip: str):
-    """Уведомление о входе с дедупликацией: одно сообщение на IP раз в 5 минут."""
+    """Уведомление о неудачной попытке входа с дедупликацией: одно сообщение на IP раз в 5 минут."""
     now = datetime.now()
     last = _login_notify_cache.get(ip)
     if last and (now - last).total_seconds() < _LOGIN_DEDUP_SECONDS:
