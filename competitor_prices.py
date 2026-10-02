@@ -15,7 +15,7 @@ MSK = ZoneInfo("Europe/Moscow")
 def _now() -> datetime:
     return datetime.now(MSK)
 
-from competitor_parsers import merani, prom23
+from competitor_parsers import merani, prom23, deltakom, tdkorsar, psk_holding
 
 # Карта (сайт, название позиции) -> прямая ссылка на карточку товара, для кликабельных ссылок на фронтенде
 _URL_MAP = {}
@@ -23,6 +23,12 @@ for _name, _url in merani.SKU_PAGES:
     _URL_MAP[("merani.ru", _name)] = _url
 for _name, _url in prom23.SKU_PAGES:
     _URL_MAP[("prom23.ru", _name)] = _url
+for _name, _url in deltakom.SKU_PAGES:
+    _URL_MAP[("ooodeltakom.ru", _name)] = _url
+for _name, _url in tdkorsar.SKU_PAGES:
+    _URL_MAP[("tdkorsar.ru", _name)] = _url
+for _name, _url in psk_holding.SKU_PAGES:
+    _URL_MAP[("psk-holding.ru", _name)] = _url
 
 DB_PATH = Path(__file__).parent / "competitor_prices.sqlite3"
 
@@ -60,6 +66,40 @@ def _collect_rows() -> list[dict]:
             })
     except Exception as e:
         rows.append({"site": "merani.ru", "variant": f"[ОШИБКА: {e}]",
+                      "price_per_sheet": None, "in_stock": None, "parsed_at": now})
+
+    try:
+        for r in deltakom.fetch_all():
+            rows.append({
+                "site": r.site, "variant": r.variant,
+                "price_per_sheet": r.price_per_sheet, "in_stock": None,
+                "parsed_at": now,
+            })
+    except Exception as e:
+        rows.append({"site": "ooodeltakom.ru", "variant": f"[ОШИБКА: {e}]",
+                      "price_per_sheet": None, "in_stock": None, "parsed_at": now})
+
+    try:
+        for r in tdkorsar.fetch_all():
+            rows.append({
+                "site": r.site, "variant": r.variant,
+                "price_per_sheet": r.price_per_sheet,
+                "in_stock": (1 if r.in_stock else 0) if r.in_stock is not None else None,
+                "parsed_at": now,
+            })
+    except Exception as e:
+        rows.append({"site": "tdkorsar.ru", "variant": f"[ОШИБКА: {e}]",
+                      "price_per_sheet": None, "in_stock": None, "parsed_at": now})
+
+    try:
+        for r in psk_holding.fetch_all():
+            rows.append({
+                "site": r.site, "variant": r.variant,
+                "price_per_sheet": r.price_per_sheet, "in_stock": None,
+                "parsed_at": now,
+            })
+    except Exception as e:
+        rows.append({"site": "psk-holding.ru", "variant": f"[ОШИБКА: {e}]",
                       "price_per_sheet": None, "in_stock": None, "parsed_at": now})
 
     try:
