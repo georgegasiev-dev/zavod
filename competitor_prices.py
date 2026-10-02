@@ -15,7 +15,7 @@ MSK = ZoneInfo("Europe/Moscow")
 def _now() -> datetime:
     return datetime.now(MSK)
 
-from competitor_parsers import merani, prom23, deltakom, tdkorsar, psk_holding
+from competitor_parsers import merani, prom23, deltakom, tdkorsar, psk_holding, sgmonolit
 
 # Карта (сайт, название позиции) -> прямая ссылка на карточку товара, для кликабельных ссылок на фронтенде
 _URL_MAP = {}
@@ -29,6 +29,8 @@ for _name, _url in tdkorsar.SKU_PAGES:
     _URL_MAP[("tdkorsar.ru", _name)] = _url
 for _name, _url in psk_holding.SKU_PAGES:
     _URL_MAP[("psk-holding.ru", _name)] = _url
+for _name, _url in sgmonolit.SKU_PAGES:
+    _URL_MAP[("sgmonolit.ru", _name)] = _url
 
 DB_PATH = Path(__file__).parent / "competitor_prices.sqlite3"
 
@@ -100,6 +102,17 @@ def _collect_rows() -> list[dict]:
             })
     except Exception as e:
         rows.append({"site": "psk-holding.ru", "variant": f"[ОШИБКА: {e}]",
+                      "price_per_sheet": None, "in_stock": None, "parsed_at": now})
+
+    try:
+        for r in sgmonolit.fetch_all():
+            rows.append({
+                "site": r.site, "variant": r.variant,
+                "price_per_sheet": r.price_per_sheet, "in_stock": None,
+                "parsed_at": now,
+            })
+    except Exception as e:
+        rows.append({"site": "sgmonolit.ru", "variant": f"[ОШИБКА: {e}]",
                       "price_per_sheet": None, "in_stock": None, "parsed_at": now})
 
     try:
