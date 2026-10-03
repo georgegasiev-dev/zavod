@@ -158,6 +158,25 @@ def get_price_history() -> dict:
     return {"positions": positions}
 
 
+_last_manual_collect: datetime | None = None
+_MANUAL_COLLECT_COOLDOWN_SECONDS = 120  # не чаще раза в 2 минуты на повторные клики "Обновить"
+
+
+def collect_and_save_if_due() -> bool:
+    """Как collect_and_save(), но с дедупликацией: если с прошлого ручного
+    сбора прошло меньше _MANUAL_COLLECT_COOLDOWN_SECONDS — ничего не делает
+    и возвращает False (фронтенд просто получит уже сохранённые данные)."""
+    global _last_manual_collect
+    now = _now()
+    if _last_manual_collect is not None:
+        elapsed = (now - _last_manual_collect).total_seconds()
+        if elapsed < _MANUAL_COLLECT_COOLDOWN_SECONDS:
+            return False
+    _last_manual_collect = now
+    collect_and_save()
+    return True
+
+
 def collect_and_save() -> int:
     """Собирает цены со всех сайтов и сохраняет в БД. Возвращает число сохранённых строк.
     Используется и планировщиком, и командой /rynok (через build_rynok_report)."""
