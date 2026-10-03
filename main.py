@@ -1148,6 +1148,18 @@ def competitor_prices_endpoint():
     from competitor_prices import get_price_history
     return get_price_history()
 
+@app.post("/api/competitor-prices/refresh")
+def competitor_prices_refresh_endpoint():
+    """Запускает живой парсинг всех сайтов конкурентов и сохраняет результат.
+    Открытый эндпоинт, как и чтение истории — но с дедупликацией 2 минуты,
+    чтобы повторные клики по кнопке «Обновить» не долбили сайты конкурентов
+    запросами на каждый клик."""
+    from competitor_prices import collect_and_save_if_due, get_price_history
+    saved = collect_and_save_if_due()
+    data = get_price_history()
+    data["refreshed"] = saved
+    return data
+
 @app.get("/api/sync/status")
 def sync_status(_: str = Depends(verify_admin)):
     """Следующий запуск по расписанию."""
