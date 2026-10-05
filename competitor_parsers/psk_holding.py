@@ -83,11 +83,19 @@ def _price_from_text(soup: BeautifulSoup) -> int | None:
     return None
 
 
+MIN_PLAUSIBLE_PRICE = 500  # лист фанеры 18мм реально не может стоить дешевле этого — если цифра ниже,
+                            # значит зацепили не ту цену (например, с товара-миниатюры в блоке "похожие")
+
+
 def parse_sku_page(html: str) -> dict:
     soup = BeautifulSoup(html, "lxml")
     price = _price_from_jsonld(soup)
-    if price is None:
-        price = _price_from_text(soup)
+    if price is None or price < MIN_PLAUSIBLE_PRICE:
+        text_price = _price_from_text(soup)
+        if text_price is not None and text_price >= MIN_PLAUSIBLE_PRICE:
+            price = text_price
+        elif price is not None and price < MIN_PLAUSIBLE_PRICE:
+            price = None  # явно мусорное значение — лучше пропустить, чем показать неверную цену
     return {"price": price}
 
 
