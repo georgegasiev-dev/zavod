@@ -49,9 +49,10 @@ def make_snapshot() -> str:
     return tmp
 
 
-def pull_db(fresh: bool = False) -> dict:
+def pull_db(fresh: bool = False, max_age: int = 300) -> dict:
     """Скачивает копию базы с главного сервера и атомарно подменяет локальную.
-    fresh=True — главный сервер перед отдачей сам запрашивает выписку у банка."""
+    fresh=True — главный сервер перед отдачей сам запрашивает выписку у банка,
+    но только если последняя синхронизация старше max_age секунд."""
     from database import DB_PATH
     source = replica_source()
     token = os.getenv("REPLICA_TOKEN", "")
@@ -64,7 +65,7 @@ def pull_db(fresh: bool = False) -> dict:
     os.close(fd)
     try:
         req = urllib.request.Request(
-            source + "/api/export-db" + ("?fresh=1" if fresh else ""),
+            source + "/api/export-db" + (f"?fresh=1&max_age={int(max_age)}" if fresh else ""),
             headers={"X-Replica-Token": token, "User-Agent": "novator-replica"},
         )
         with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as f:
