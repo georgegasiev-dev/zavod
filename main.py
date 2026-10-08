@@ -33,15 +33,48 @@ log = logging.getLogger("main")
 # ── планировщик ───────────────────────────────────────────────────────────────
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
+import threading
+_bank_lock = threading.Lock()          # только один запрос к банку одновременно (иначе гонка за токен)
+_last_bank_sync_ok = None              # время последней успешной синхронизации с банком
+
+
+def _locked_fetch_and_load(date_from=None, date_to=None):
+    """fetch_and_load под общей блокировкой, запоминает время успеха."""
+    global _last_bank_sync_ok
+    from raiffeisen_api import fetch_and_load
+    with _bank_lock:
+        result = fetch_and_load(date_from, date_to)
+        _last_bank_sync_ok = datetime.now()
+        return result
+
+
+def _fresh_bank_sync(max_age: int = 120) -> str:
+    """Запрашивает выписку у банка, если последняя синхронизация старше max_age секунд.
+    Возвращает: ok / recent / failed / no_token."""
+    global _last_bank_sync_ok
+    from raiffeisen_api import fetch_and_load, load_token, CLIENT_ID
+    if not (CLIENT_ID and load_token()):
+        return "no_token"
+    with _bank_lock:
+        if _last_bank_sync_ok and (datetime.now() - _last_bank_sync_ok).total_seconds() < max_age:
+            return "recent"
+        try:
+            fetch_and_load()
+            _last_bank_sync_ok = datetime.now()
+            return "ok"
+        except Exception as e:
+            log.error("Ошибка запроса выписки по требованию реплики: %s", e)
+            return "failed"
+
+
 async def scheduled_gmail_sync():
     """Запускается по расписанию — тянет выписку из Raiffeisen API в отдельном потоке."""
     from raiffeisen_api import load_token, CLIENT_ID
     if CLIENT_ID and load_token():
         log.info("⏰ Синхронизация через Raiffeisen API...")
         try:
-            from raiffeisen_api import fetch_and_load
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, fetch_and_load)
+            result = await loop.run_in_executor(None, _locked_fetch_and_load)
             log.info("Raiffeisen sync: %s", result)
         except Exception as e:
             log.error("Ошибка Raiffeisen sync: %s", e)
@@ -71,7 +104,7 @@ async def _sync_before_report():
     if is_replica():
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, pull_db)
+            await loop.run_in_executor(None, lambda: pull_db(fresh=True))
         except Exception as e:
             log.error("Ошибка обновления базы с главного сервера перед отчётом: %s", e)
         return
@@ -1068,8 +1101,13 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
         await reply("⏳ Обновляю данные с основного сервера...")
         try:
             from replica import pull_db
-            await asyncio.get_event_loop().run_in_executor(None, pull_db)
-            await reply("✅ Данные обновлены с основного сервера (банк синхронизируется там раз в 30 минут)")
+            res = await asyncio.get_event_loop().run_in_executor(None, lambda: pull_db(fresh=True))
+            state = res.get("bank_sync")
+            if state in ("ok", "recent"):
+                await reply("✅ Выписка запрошена в банке, данные обновлены")
+            else:
+                await reply("⚠️ Данные с основного сервера получены, но банк сейчас не ответил — "
+                            "выписка может быть не самой свежей")
         except Exception as e:
             await reply(f"❌ Не удалось обновить данные: {str(e)[:300]}")
     elif cmd in ("/sync", "sync", "обновить"):
@@ -1210,7 +1248,7 @@ def sync_status(_: str = Depends(verify_admin)):
     }
 
 @app.get("/api/export-db")
-def export_db(request: Request):
+def export_db(request: Request, fresh: int = 0):
     """Отдаёт консистентную копию базы (без токена банка) для реплики.
     Защищён отдельным секретом REPLICA_TOKEN, не публичным API_KEY."""
     expected = os.environ.get("REPLICA_TOKEN", "")
@@ -1218,8 +1256,10 @@ def export_db(request: Request):
     if not expected or not secrets.compare_digest(given.encode(), expected.encode()):
         raise HTTPException(status_code=403, detail="Forbidden")
     from replica import make_snapshot
+    bank_state = _fresh_bank_sync() if fresh else "skipped"
     tmp = make_snapshot()
     return FileResponse(tmp, media_type="application/octet-stream", filename="novator.db",
+                        headers={"X-Bank-Sync": bank_state},
                         background=BackgroundTask(os.remove, tmp))
 
 
@@ -1530,8 +1570,7 @@ def _run_sync_job(job_id: str, date_from: str, date_to: str):
     import time
     _sync_jobs[job_id] = {"status": "running", "started_at": time.time()}
     try:
-        from raiffeisen_api import fetch_and_load
-        result = fetch_and_load(date_from, date_to)
+        result = _locked_fetch_and_load(date_from, date_to)
         _sync_jobs[job_id] = {"status": "ok", **result}
     except Exception as e:
         log.exception("Raiffeisen sync job %s упал", job_id)
