@@ -49,8 +49,9 @@ def make_snapshot() -> str:
     return tmp
 
 
-def pull_db() -> dict:
-    """Скачивает копию базы с главного сервера и атомарно подменяет локальную."""
+def pull_db(fresh: bool = False) -> dict:
+    """Скачивает копию базы с главного сервера и атомарно подменяет локальную.
+    fresh=True — главный сервер перед отдачей сам запрашивает выписку у банка."""
     from database import DB_PATH
     source = replica_source()
     token = os.getenv("REPLICA_TOKEN", "")
@@ -63,10 +64,11 @@ def pull_db() -> dict:
     os.close(fd)
     try:
         req = urllib.request.Request(
-            source + "/api/export-db",
+            source + "/api/export-db" + ("?fresh=1" if fresh else ""),
             headers={"X-Replica-Token": token, "User-Agent": "novator-replica"},
         )
         with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as f:
+            bank_sync = r.headers.get("X-Bank-Sync", "")
             shutil.copyfileobj(r, f)
 
         size = os.path.getsize(tmp)
@@ -84,7 +86,7 @@ def pull_db() -> dict:
 
         os.replace(tmp, DB_PATH)
         log.info("Реплика: база обновлена с %s (%d байт)", source, size)
-        return {"size": size}
+        return {"size": size, "bank_sync": bank_sync}
     except Exception:
         if os.path.exists(tmp):
             os.remove(tmp)
