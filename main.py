@@ -1483,6 +1483,7 @@ def _run_sync_job(job_id: str, date_from: str, date_to: str):
         result = fetch_and_load(date_from, date_to)
         _sync_jobs[job_id] = {"status": "ok", **result}
     except Exception as e:
+        log.exception("Raiffeisen sync job %s упал", job_id)
         _sync_jobs[job_id] = {"status": "error", "detail": str(e)[:500]}
 
 
