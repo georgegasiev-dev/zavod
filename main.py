@@ -1100,6 +1100,7 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
     elif cmd in ("/sync", "sync", "обновить") and __import__("replica").is_replica():
         await reply("⏳ Обновляю данные с основного сервера...")
         try:
+            import asyncio
             from replica import pull_db
             res = await asyncio.get_event_loop().run_in_executor(None, lambda: pull_db(fresh=True))
             state = res.get("bank_sync")
