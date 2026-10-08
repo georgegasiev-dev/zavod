@@ -7,7 +7,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, Form, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from starlette.background import BackgroundTask
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -54,8 +55,26 @@ async def scheduled_gmail_sync():
         except Exception as e:
             log.error("Ошибка Gmail sync: %s", e)
 
+async def scheduled_replica_pull():
+    """Реплика: забирает свежую копию базы с главного сервера."""
+    from replica import pull_db
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, pull_db)
+    except Exception as e:
+        log.error("Ошибка обновления базы с главного сервера: %s", e)
+
+
 async def _sync_before_report():
     """Синхронизирует выписку перед отправкой отчёта (в отдельном потоке)."""
+    from replica import is_replica, pull_db
+    if is_replica():
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, pull_db)
+        except Exception as e:
+            log.error("Ошибка обновления базы с главного сервера перед отчётом: %s", e)
+        return
     try:
         from raiffeisen_api import fetch_and_load, load_token, CLIENT_ID
         if CLIENT_ID and load_token():
@@ -463,8 +482,16 @@ async def scheduled_raiffeisen_token_refresh():
 
 
 async def lifespan(app: FastAPI):
-    scheduler.add_job(scheduled_gmail_sync, IntervalTrigger(minutes=30),
-                      id="gmail_sync", replace_existing=True)
+    from replica import is_replica
+    IS_REPLICA = is_replica()
+    if IS_REPLICA:
+        # Реплика: банк не трогаем, только забираем базу с главного сервера
+        scheduler.add_job(scheduled_replica_pull, IntervalTrigger(minutes=15),
+                          id="replica_pull", replace_existing=True)
+        asyncio.create_task(scheduled_replica_pull())
+    else:
+        scheduler.add_job(scheduled_gmail_sync, IntervalTrigger(minutes=30),
+                          id="gmail_sync", replace_existing=True)
     scheduler.add_job(scheduled_tg_report, CronTrigger(hour=REPORT_HOUR, minute=REPORT_MINUTE),
                       id="tg_report", replace_existing=True)
     # Вечерний отчёт за текущий день (16:30 МСК)
@@ -476,8 +503,9 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(scheduled_tg_weekly_summary, CronTrigger(day_of_week="mon", hour=7, minute=45),
                       id="tg_weekly_summary", replace_existing=True)
     # Синхронизация выписки в воскресенье 23:50 МСК — для актуального баланса в недельном отчёте
-    scheduler.add_job(scheduled_sunday_sync, CronTrigger(day_of_week="sun", hour=23, minute=50),
-                      id="sunday_sync", replace_existing=True)
+    if not IS_REPLICA:
+        scheduler.add_job(scheduled_sunday_sync, CronTrigger(day_of_week="sun", hour=23, minute=50),
+                          id="sunday_sync", replace_existing=True)
     # Автосбор цен конкурентов — каждый день в 8:15 МСК (для таблицы "Ситуация на рынке")
     scheduler.add_job(scheduled_competitor_prices, CronTrigger(hour=8, minute=15),
                       id="competitor_prices", replace_existing=True)
@@ -485,8 +513,9 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(scheduled_db_backup, CronTrigger(day_of_week="sun", hour=22, minute=0),
                       id="db_backup", replace_existing=True)
     # Обновление токена Raiffeisen — каждые 25 дней
-    scheduler.add_job(scheduled_raiffeisen_token_refresh, CronTrigger(day=1, hour=6, minute=0),
-                      id="raiffeisen_token_refresh", replace_existing=True)
+    if not IS_REPLICA:
+        scheduler.add_job(scheduled_raiffeisen_token_refresh, CronTrigger(day=1, hour=6, minute=0),
+                          id="raiffeisen_token_refresh", replace_existing=True)
     # ФССП: проверка новых исполнительных производств по ИНН — по пятницам в 9:00 МСК
     scheduler.add_job(scheduled_fssp_check, CronTrigger(day_of_week="fri", hour=9, minute=0),
                       id="fssp_check", replace_existing=True)
@@ -1035,6 +1064,14 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
+    elif cmd in ("/sync", "sync", "обновить") and __import__("replica").is_replica():
+        await reply("⏳ Обновляю данные с основного сервера...")
+        try:
+            from replica import pull_db
+            await asyncio.get_event_loop().run_in_executor(None, pull_db)
+            await reply("✅ Данные обновлены с основного сервера (банк синхронизируется там раз в 30 минут)")
+        except Exception as e:
+            await reply(f"❌ Не удалось обновить данные: {str(e)[:300]}")
     elif cmd in ("/sync", "sync", "обновить"):
         await reply("⏳ Запрашиваю выписку из Raiffeisen API...")
         try:
@@ -1171,6 +1208,20 @@ def sync_status(_: str = Depends(verify_admin)):
         "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
         "sync_time": f"{SYNC_HOUR:02d}:{SYNC_MINUTE:02d} МСК",
     }
+
+@app.get("/api/export-db")
+def export_db(request: Request):
+    """Отдаёт консистентную копию базы (без токена банка) для реплики.
+    Защищён отдельным секретом REPLICA_TOKEN, не публичным API_KEY."""
+    expected = os.environ.get("REPLICA_TOKEN", "")
+    given = request.headers.get("x-replica-token", "")
+    if not expected or not secrets.compare_digest(given.encode(), expected.encode()):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from replica import make_snapshot
+    tmp = make_snapshot()
+    return FileResponse(tmp, media_type="application/octet-stream", filename="novator.db",
+                        background=BackgroundTask(os.remove, tmp))
+
 
 @app.post("/api/upload-db")
 async def upload_db(request: Request):
