@@ -104,19 +104,20 @@ async def _sync_before_report():
     if is_replica():
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, lambda: pull_db(fresh=True))
+            res = await loop.run_in_executor(None, lambda: pull_db(fresh=True, max_age=300))
+            return res.get("bank_sync") or "ok"
         except Exception as e:
             log.error("Ошибка обновления базы с главного сервера перед отчётом: %s", e)
-        return
+            return "failed"
     try:
-        from raiffeisen_api import fetch_and_load, load_token, CLIENT_ID
-        if CLIENT_ID and load_token():
-            log.info("🔄 Синхронизация выписки перед отчётом...")
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, fetch_and_load)
-            log.info("Pre-report sync: ops=%s", result.get("ops_saved", "?"))
+        loop = asyncio.get_event_loop()
+        # банк опрашиваем, только если последняя синхронизация старше 5 минут
+        state = await loop.run_in_executor(None, lambda: _fresh_bank_sync(300))
+        log.info("Pre-report sync: %s", state)
+        return state
     except Exception as e:
         log.error("Ошибка синхронизации перед отчётом: %s", e)
+        return "failed"
 
 
 async def scheduled_tg_report():
@@ -861,6 +862,18 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
     if cmd in HEAVY_CMDS:
         await reply("⏳ Ваш запрос обрабатывается, ожидайте до 2 минут...")
 
+    # Команды, читающие данные банка: сначала обновляем выписку (если ей больше 5 минут)
+    BANK_DATA_CMDS = {"/report", "отчёт", "отчет", "report",
+                      "/find", "/найти", "/поиск",
+                      "/babki", "babki", "бабки",
+                      "/week", "/неделя", "неделя",
+                      "/morning", "/утро", "утро", "morning"}
+    _tl = text.lower()
+    if cmd in BANK_DATA_CMDS or _tl.startswith("/find ") or _tl.startswith("/найти "):
+        sync_state = await _sync_before_report()
+        if sync_state == "failed":
+            await reply("⚠️ Не удалось запросить свежую выписку в банке — данные ниже могут быть не самыми свежими.")
+
     if cmd in ("/report", "отчёт", "отчет", "report"):
         await reply("⏳ Формирую вечерний отчёт...")
         try:
@@ -1102,7 +1115,7 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
         try:
             import asyncio
             from replica import pull_db
-            res = await asyncio.get_event_loop().run_in_executor(None, lambda: pull_db(fresh=True))
+            res = await asyncio.get_event_loop().run_in_executor(None, lambda: pull_db(fresh=True, max_age=60))
             state = res.get("bank_sync")
             if state in ("ok", "recent"):
                 await reply("✅ Выписка запрошена в банке, данные обновлены")
@@ -1249,7 +1262,7 @@ def sync_status(_: str = Depends(verify_admin)):
     }
 
 @app.get("/api/export-db")
-def export_db(request: Request, fresh: int = 0):
+def export_db(request: Request, fresh: int = 0, max_age: int = 300):
     """Отдаёт консистентную копию базы (без токена банка) для реплики.
     Защищён отдельным секретом REPLICA_TOKEN, не публичным API_KEY."""
     expected = os.environ.get("REPLICA_TOKEN", "")
@@ -1257,7 +1270,7 @@ def export_db(request: Request, fresh: int = 0):
     if not expected or not secrets.compare_digest(given.encode(), expected.encode()):
         raise HTTPException(status_code=403, detail="Forbidden")
     from replica import make_snapshot
-    bank_state = _fresh_bank_sync() if fresh else "skipped"
+    bank_state = _fresh_bank_sync(max(0, min(max_age, 3600))) if fresh else "skipped"
     tmp = make_snapshot()
     return FileResponse(tmp, media_type="application/octet-stream", filename="novator.db",
                         headers={"X-Bank-Sync": bank_state},
