@@ -413,7 +413,7 @@ async def _process_tg_message(msg: dict):
             log.error("Ошибка ответа в Telegram: %s\n%s", e, traceback.format_exc())
 
     # Передаём управление основному обработчику webhook
-    await _handle_tg_message(chat_id, text, tg_chat, tg_token, reply)
+    await _handle_tg_message(chat_id, text, tg_chat, tg_token, reply, msg)
 
 
 async def _start_tg_polling():
@@ -824,11 +824,11 @@ async def tg_webhook(request: Request):
             import traceback
             log.error("Ошибка ответа в Telegram: %s\n%s", e, traceback.format_exc())
 
-    await _handle_tg_message(chat_id, text, tg_chat, tg_token, reply)
+    await _handle_tg_message(chat_id, text, tg_chat, tg_token, reply, msg)
     return {"ok": True}
 
 
-async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: str, reply):
+async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: str, reply, msg=None):
     """Основная логика обработки сообщений Telegram (используется в webhook и polling)."""
     """Основная логика обработки сообщений Telegram (используется в webhook и polling)."""
     # Владелец всегда имеет доступ, остальные — через пароль
@@ -855,7 +855,22 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
         await reply("🔒 Введите /start ПАРОЛЬ для получения доступа.")
         return {"ok": True}
 
+    if msg and msg.get("voice"):
+        from bot_ai_support import handle_voice
+        await handle_voice(msg, tg_token, reply)
+        return {"ok": True}
+
     cmd = text.lower().split()[0] if text else ""
+    if cmd.split("@", 1)[0] == "/usage":
+        from bot_ai_support import usage_report
+        import asyncio
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(None, usage_report)
+            await reply(result)
+        except Exception as error:
+            log.error("Usage report failed: %s", type(error).__name__)
+            await reply("⚠️ Не удалось прочитать статистику AI.")
+        return {"ok": True}
 
     # Мгновенная отбивка для тяжёлых команд
     HEAVY_CMDS = {"/report", "/morning", "/week", "/babki", "/sync", "/find", "/найти", "/rynok"}
@@ -1185,6 +1200,9 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
             "/eovr 5 — выработка за конкретный месяц (номер)\n"
             "/eovr 2025 5 — выработка за месяц конкретного года\n"
             "/sync_eovr — принудительно обновить данные ЕОВР\n\n"
+            "<b>AI-помощник:</b>\n"
+            "/usage — расход токенов и голосового аудио\n"
+            "Текст или голосовое — вопрос по данным завода\n\n"
             "/help — эта справка\n"
             "/myid — узнать свой Telegram ID\n\n"
             "🕔 ЕОВР обновляется автоматически в 9:00, 10:00, 11:00 и 18:00 МСК"
