@@ -1,0 +1,28 @@
+name: Timeweb diagnostics
+on:
+  push:
+    branches: [codex/timeweb-diagnostics]
+    paths: [.github/workflows/timeweb-diagnostics.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Inspect Novator server without changes
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 2m
+          script: |
+            set -eu
+            test "$(hostname)" = "8384475-da279743"
+            cd /opt/zavod
+            printf 'SERVER_OK\n'
+            git rev-parse HEAD
+            systemctl is-active zavod.service
+            /opt/zavod/venv/bin/python -c "from dotenv import dotenv_values; c=dotenv_values('/opt/zavod/.env'); print({k: bool(c.get(k)) for k in ['EOVR_API_KEY','ADMIN_PASS']})"
