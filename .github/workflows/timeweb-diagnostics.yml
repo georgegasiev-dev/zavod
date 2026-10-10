@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Inspect Novator server without changes
+      - name: Back up database and classify two approved payments
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -22,12 +22,72 @@ jobs:
             set -eu
             test "$(hostname -s)" = "8384475-da279743"
             cd /opt/zavod
-            git rev-parse HEAD
+            test "$(git rev-parse HEAD)" = "b6aa4e64e626aecb0b08e8421b47df481bb56b70"
+            systemctl is-active zavod.service
+            trap 'systemctl start zavod.service' EXIT
+            systemctl stop zavod.service
             /opt/zavod/venv/bin/python - <<'PY'
+            import json, sqlite3, time
+            from pathlib import Path
+            from decimal import Decimal
+            from dotenv import dotenv_values
+            from collections import defaultdict
+            config=dotenv_values('/opt/zavod/.env')
+            assert not config.get('REPLICA_OF'), 'Primary server required'
+            path=Path(config.get('DB_PATH') or '/opt/zavod/data/novator.db').resolve()
+            assert path.is_file(), 'Database missing'
+            db=sqlite3.connect(str(path),timeout=30)
+            backup=path.with_name(path.name+'.before-profit-'+str(time.time_ns()))
+            with sqlite3.connect(str(backup)) as dst: db.backup(dst)
+            backup.chmod(0o600)
+            targets=[('Октябрь','02.10.2026','3316009076',2637500),('Сентябрь','01.09.2026','3316015200',3692500)]
+            try:
+                db.execute('BEGIN IMMEDIATE')
+                changes=[]
+                for month,date,inn,amount in targets:
+                    row=db.execute('SELECT data FROM month_data WHERE month=?',(month,)).fetchone()
+                    data=json.loads(row[0]) if row else {}
+                    ops=data.get('ops',[])
+                    matches=[o for o in ops if o.get('is_debit') and o.get('date')==date and ('ИНН: '+inn) in o.get('contractor','') and Decimal(str(o.get('amount',0)))==Decimal(amount)]
+                    assert len(matches)==1, 'Expected one payment in '+month
+                    before=sum(Decimal(str(o.get('amount',0))) for o in ops if o.get('is_debit'))
+                    matches[0]['cat']='Из прибыли'
+                    matches[0]['manual_cat']=True
+                    totals=defaultdict(float)
+                    for o in ops:
+                        if o.get('is_debit'): totals[o.get('cat','')]+=o.get('amount',0) or 0
+                    data['cats']=[{'name':k,'fact':round(v)} for k,v in sorted(totals.items(),key=lambda x:-x[1])]
+                    assert before==sum(Decimal(str(o.get('amount',0))) for o in ops if o.get('is_debit'))
+                    changes.append((json.dumps(data,ensure_ascii=False),month))
+                db.executemany('UPDATE month_data SET data=?,updated_at=datetime("now") WHERE month=?',changes)
+                db.commit()
+                print('TWO_PAYMENTS_CLASSIFIED; CASH_TOTALS_UNCHANGED; BACKUP_CREATED')
+                for month,_,_,_ in targets:
+                    data=json.loads(db.execute('SELECT data FROM month_data WHERE month=?',(month,)).fetchone()[0])
+                    print(month, 'Из прибыли:',sum(o.get('amount',0) for o in data['ops'] if o.get('is_debit') and o.get('cat')=='Из прибыли'))
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
+            PY
+            systemctl start zavod.service
+            trap - EXIT
+            systemctl is-active zavod.service
+            /opt/zavod/venv/bin/python - <<'PY'
+            import time,requests
             from dotenv import dotenv_values
             c=dotenv_values('/opt/zavod/.env')
-            ready={k:bool(c.get(k)) for k in ['EOVR_API_KEY','ADMIN_PASS']}
-            print('DEPLOYMENT_CONFIGURATION_READY:',ready)
-            assert all(ready.values())
+            for attempt in range(12):
+                try:
+                    r=requests.get('http://127.0.0.1:8000/api/raiffeisen/status',auth=(c.get('ADMIN_USER') or 'admin',c['ADMIN_PASS']),timeout=5)
+                    assert r.status_code==200,'Auth check failed'
+                    d=requests.get('http://127.0.0.1:8000/api/data',timeout=10).json()
+                    for month,amount in [('Октябрь',2637500),('Сентябрь',3692500)]:
+                        assert any(o.get('cat')=='Из прибыли' and o.get('amount')==amount and o.get('manual_cat') for o in d[month]['ops'])
+                    print('API_AND_LOGIN_OK; PAYMENT_CATEGORIES_VERIFIED')
+                    break
+                except (requests.RequestException,AssertionError):
+                    if attempt==11: raise RuntimeError('Post-deploy health check failed')
+                    time.sleep(2)
             PY
-            systemctl is-active zavod.service
