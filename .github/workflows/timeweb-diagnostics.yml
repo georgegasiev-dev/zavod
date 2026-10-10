@@ -22,29 +22,12 @@ jobs:
             set -eu
             test "$(hostname -s)" = "8384475-da279743"
             cd /opt/zavod
+            git rev-parse HEAD
             /opt/zavod/venv/bin/python - <<'PY'
-            import ast, os, shutil, time
-            from pathlib import Path
-            from dotenv import dotenv_values, set_key
-            tree=ast.parse(Path('main.py').read_text())
-            found={}
-            for node in tree.body:
-                if not isinstance(node, ast.Assign): continue
-                for target in node.targets:
-                    if not isinstance(target, ast.Name): continue
-                    if target.id == 'EOVR_API_KEY' and isinstance(node.value,ast.Constant):
-                        found[target.id]=node.value.value
-                    if target.id == 'ADMIN_PASS' and isinstance(node.value,ast.Call) and len(node.value.args)>1:
-                        found[target.id]=ast.literal_eval(node.value.args[1])
-            env=dotenv_values('.env')
-            missing=[k for k in ['EOVR_API_KEY','ADMIN_PASS'] if not env.get(k)]
-            assert all(isinstance(found.get(k),str) and found[k] for k in missing), 'Cannot preserve configuration safely'
-            if missing:
-                backup=Path('.env.before-profit-'+str(time.time_ns()))
-                shutil.copy2('.env',backup)
-                backup.chmod(0o600)
-                for k in missing: set_key('.env',k,found[k])
-                Path('.env').chmod(0o600)
-            assert all(dotenv_values('.env').get(k) for k in ['EOVR_API_KEY','ADMIN_PASS'])
-            print('CONFIG_PRESERVED')
+            from dotenv import dotenv_values
+            c=dotenv_values('/opt/zavod/.env')
+            ready={k:bool(c.get(k)) for k in ['EOVR_API_KEY','ADMIN_PASS']}
+            print('DEPLOYMENT_CONFIGURATION_READY:',ready)
+            assert all(ready.values())
             PY
+            systemctl is-active zavod.service
