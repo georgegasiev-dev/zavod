@@ -1,8 +1,9 @@
-name: Apply September profit categories
+name: Timeweb diagnostics
 on:
   push:
     branches: [codex/timeweb-diagnostics]
     paths: [.github/workflows/timeweb-diagnostics.yml]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -10,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Apply approved September classifications with backup
+      - name: Read-only service and profit category diagnostics
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -21,50 +22,18 @@ jobs:
             set -eu
             test "$(hostname -s)" = "8384475-da279743"
             cd /opt/zavod
+            git rev-parse HEAD
             systemctl is-active zavod.service
-            systemctl stop zavod.service
-            trap 'systemctl start zavod.service' EXIT
             /opt/zavod/venv/bin/python - <<'PY'
-            import os,json,sqlite3,copy
-            from datetime import datetime
-            from pathlib import Path
+            import requests
             from dotenv import dotenv_values
-            config=dotenv_values('/opt/zavod/.env')
-            for k,v in config.items():
-                if v is not None: os.environ[k]=v
-            from database import DB_PATH,rebuild_category_totals
-            targets=json.loads(r'''[{"month":"Сентябрь","date":"01.09.2026","contractor":"ООО \"ГАЗОВИК\", ИНН: 5219003361","amount":100000,"desc":"Счет № 7 от 28 июля 2026 г. за газоснабжение нежилого здания  В том числе НДС 22"},{"month":"Сентябрь","date":"01.09.2026","contractor":"ООО \"КОМПАНИЯ МЕТРО\", ИНН: 5228009169","amount":100000,"desc":"Оплата по акту сверки взаимных расчетов.  В том числе НДС 5% - 4761,90"},{"month":"Сентябрь","date":"01.09.2026","contractor":"ООО \"ФАНЕРНЫЙ ЗАВОД \"ЭКОФАНЕРА\", ИНН: 3316015200","amount":3692500,"desc":"Авансовый платеж по договору купли продажи №19/1 от 31 июля 2026 г. за линию суш"},{"month":"Сентябрь","date":"07.09.2026","contractor":"ООО \"БЕТОННЫЙ ЗАВОД \"ВЕРТИКАЛЬ\", ИНН: 5228057814","amount":118700,"desc":"Акт сверки взаимных расчетов за период: 2026 г. между ООО \"БЕТОННЫЙ ЗАВОД \"ВЕРТИ"},{"month":"Сентябрь","date":"07.09.2026","contractor":"ООО \"ГРОСС-МЕТАЛЛ\", ИНН: 5256154305","amount":381190,"desc":"Предоплата по Счету на оплату №  724 от 01 сентября 2026 г. за Труба бесш., Лист"},{"month":"Сентябрь","date":"14.09.2026","contractor":"ГАСИЕВ ГЕОРГИЙ ВЛАДИСЛАВОВИЧ, ИНН: 772703898681","amount":324000,"desc":"Счёт на оплату №33649823 от 14 сентября 2026 г. Подготовка аналитического отчёта"},{"month":"Сентябрь","date":"14.09.2026","contractor":"ООО \"ГРОСС-МЕТАЛЛ\", ИНН: 5256154305","amount":381190,"desc":"Предоплата по Счету на оплату №  724 от 01 сентября 2026 г. за Труба бесш., Лист"},{"month":"Сентябрь","date":"16.09.2026","contractor":"ООО \"КОМПАНИЯ МЕТРО\", ИНН: 5228009169","amount":50000,"desc":"Оплата по акту сверки взаимных расчетов.  В том числе НДС 5% - 2380,95"},{"month":"Сентябрь","date":"16.09.2026","contractor":"ООО \"ГАЗОВИК\", ИНН: 5219003361","amount":100000,"desc":"Счет № 7 от 28 июля 2026 г. за газоснабжение нежилого здания  В том числе НДС 22"},{"month":"Сентябрь","date":"23.09.2026","contractor":"ООО \"ГРОСС-МЕТАЛЛ\", ИНН: 5256154305","amount":25440,"desc":"Счет № 748 от 08 сентября 2026 г. за пластину. В том числе НДС 22% - 4587,54"},{"month":"Сентябрь","date":"23.09.2026","contractor":"ООО \"ГАЗОВИК\", ИНН: 5219003361","amount":100000,"desc":"Счет № 7 от 28 июля 2026 г. за газоснабжение нежилого здания  В том числе НДС 22"},{"month":"Сентябрь","date":"23.09.2026","contractor":"ООО \"КОМПАНИЯ МЕТРО\", ИНН: 5228009169","amount":124422,"desc":"Оплата по акту сверки взаимных расчетов.  В том числе НДС 5% - 5924,86"},{"month":"Сентябрь","date":"23.09.2026","contractor":"ГАСИЕВ ГЕОРГИЙ ВЛАДИСЛАВОВИЧ, ИНН: 772703898681","amount":324000,"desc":"Счёт на оплату №33966275 от 23 сентября 2026 г.  Подготовка аналитического отчёт"},{"month":"Сентябрь","date":"25.09.2026","contractor":"ООО \"БЕТОННЫЙ ЗАВОД \"ВЕРТИКАЛЬ\", ИНН: 5228057814","amount":78500,"desc":"Счет на оплату № 601 от 22 сентября 2026 г. Бетон М-350, Транспортные услуги (АБ"},{"month":"Октябрь","date":"29.09.2026","contractor":"ИП Ахапкин Евгений Евгеньевич, ИНН: 331620394548","amount":15000,"desc":"Счет на оплату № 81 от 25 сентября 2026 г. Транспортные услуги  НДС не облагаетс"},{"month":"Октябрь","date":"29.09.2026","contractor":"ООО \"ГАЗОВИК\", ИНН: 5219003361","amount":50000,"desc":"Счет № 7 от 28 июля 2026 г. за газоснабжение нежилого здания  В том числе НДС 22"},{"month":"Октябрь","date":"29.09.2026","contractor":"ООО \"БЕТОННЫЙ ЗАВОД \"ВЕРТИКАЛЬ\", ИНН: 5228057814","amount":148000,"desc":"Счет на оплату № 620 от 28 сентября 2026 г. Бетон М-350 15 м3, Транспортные услу"}]''')
-            path=Path(DB_PATH).resolve()
-            assert path.is_file(), 'Database missing'
-            conn=sqlite3.connect(str(path),timeout=30)
-            backup=path.with_name(path.name+'.before-profit-september-'+datetime.now().strftime('%Y%m%d%H%M%S')+'.bak')
-            dest=sqlite3.connect(str(backup));conn.backup(dest);dest.close();os.chmod(backup,0o600)
-            def cash_signature(data):
-                return [(m,copy.deepcopy(d.get('weeks_in')),copy.deepcopy(d.get('weeks_out')),[(o.get('date'),o.get('contractor'),o.get('amount'),o.get('is_debit'),o.get('desc'),o.get('week')) for o in d.get('ops',[])]) for m,d in sorted(data.items())]
-            conn.execute('BEGIN IMMEDIATE')
-            try:
-                data={m:json.loads(d) for m,d in conn.execute('SELECT month,data FROM month_data')}
-                before=cash_signature(data)
-                changed=0;touched=set()
-                for t in targets:
-                    matches=[o for o in data[t['month']].get('ops',[]) if o.get('is_debit') and all(o.get(k)==t[k] for k in ['date','contractor','amount','desc'])]
-                    assert len(matches)==1, 'Target missing or ambiguous: '+t['date']+' '+str(t['amount'])
-                    o=matches[0]
-                    if o.get('cat')!='Из прибыли' or not o.get('manual_cat'):
-                        o['cat']='Из прибыли';o['manual_cat']=True;changed+=1;touched.add(t['month'])
-                ops=[o for d in data.values() for o in d.get('ops',[]) if o.get('is_debit') and o.get('date','').endswith('.09.2026') and o.get('cat')=='Из прибыли']
-                assert len(ops)==17 and sum(o['amount'] for o in ops)==6112942,'Unexpected September total'
-                assert cash_signature(data)==before,'Cash data changed'
-                for m in touched:
-                    rebuild_category_totals(data[m])
-                    conn.execute('UPDATE month_data SET data=?,updated_at=? WHERE month=?',(json.dumps(data[m],ensure_ascii=False),datetime.now().isoformat(),m))
-                conn.commit()
-                print('SEPTEMBER_PROFIT_CATEGORY_OK',{'changed':changed,'operations':len(ops),'total':sum(o['amount'] for o in ops),'cash_unchanged':True})
-            except:
-                conn.rollback();raise
-            finally:
-                conn.close()
+            c=dotenv_values('/opt/zavod/.env')
+            print('CONFIG_READY:',{k:bool(c.get(k)) for k in ['EOVR_API_KEY','ADMIN_PASS']})
+            r=requests.get('http://127.0.0.1:8000/api/data',timeout=15)
+            r.raise_for_status()
+            data=r.json()
+            for month in ['Сентябрь','Октябрь']:
+                ops=[o for o in data.get(month,{}).get('ops',[]) if o.get('is_debit') and o.get('cat')=='Из прибыли']
+                print(month, 'Из прибыли:',sum(o.get('amount',0) for o in ops), 'операций:',len(ops))
+            print('READ_ONLY_DIAGNOSTICS_OK')
             PY
-            systemctl start zavod.service
-            trap - EXIT
-            systemctl is-active zavod.service
