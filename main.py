@@ -194,7 +194,7 @@ async def scheduled_competitor_prices():
 # ─── ЕОВР: парсер Google Sheets ────────────────────────────────────────────
 
 EOVR_SHEET_ID = "1iYEuupLfhvM-jS4D8NiaL2dcnoUheu1GRPy5UJc9yUg"
-EOVR_API_KEY  = "AIzaSyAdAPQ2x7EMsBH-JBusw6ioxQZ8xdPbEP0"
+EOVR_API_KEY = os.getenv("EOVR_API_KEY", "")
 
 _EOVR_MONTH_NAMES = {
     'январь':1,'февраль':2,'март':3,'апрель':4,'май':5,'июнь':6,
@@ -578,10 +578,10 @@ app.add_middleware(
 )
 
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
-ADMIN_PASS = os.getenv("ADMIN_PASS", "novator2026")
+ADMIN_PASS = os.getenv("ADMIN_PASS", "")
 
 def verify_admin(creds: HTTPBasicCredentials = Depends(security), request: Request = None):
-    ok = (secrets.compare_digest(creds.username.encode(), ADMIN_USER.encode()) and
+    ok = (bool(ADMIN_PASS) and secrets.compare_digest(creds.username.encode(), ADMIN_USER.encode()) and
           secrets.compare_digest(creds.password.encode(), ADMIN_PASS.encode()))
     if not ok:
         ip = request.headers.get("x-forwarded-for", request.client.host if request and request.client else "—")
@@ -665,6 +665,7 @@ DEFAULT_PLAN = {
     "adm":         [0,0,0,0,0],
     "arenda":      [50000,50000,50000,50000,50000],
     "prochie":     [0,0,0,0,0],
+    "iz_pribyli":  [0,0,0,0,0],
     "prikhod":     [11820000,11820000,11820000,11820000,11820000],
     "proizvod":    [0,0,0,0,0],
 }
@@ -691,6 +692,7 @@ CAT_TO_PLAN_KEY = {
     "Аренда помещений":       "arenda",
     "Административные":       "adm",
     "Прочие нераспознанные":  "prochie",
+    "Из прибыли":             "iz_pribyli",
     "Поступления от клиентов":"prikhod",
 }
 
@@ -1444,9 +1446,12 @@ async def reclassify_op(
             a_match = abs(float(op.get("amount", 0)) - float(op_amount)) < 0.5
             if c_match and d_match and a_match:
                 op["cat"] = new_cat
+                op["manual_cat"] = True
                 changed += 1
                 break  # меняем только первую совпавшую
         if changed:
+            from database import rebuild_category_totals
+            rebuild_category_totals(data)
             save_month_data(month, data)
     else:
         # Меняем все операции контрагента во всех месяцах + сохраняем в справочник

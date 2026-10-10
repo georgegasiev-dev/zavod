@@ -175,6 +175,23 @@ def save_contractor_comment(contractor: str, comment: str):
         conn.commit()
 
 
+def operation_identity(op):
+    """Exact bank-operation identity for preserving an explicit manual category."""
+    from decimal import Decimal
+    return (str(op.get('date', '')), op.get('contractor', ''),
+            Decimal(str(op.get('amount', 0))), op.get('desc', ''), bool(op.get('is_debit')))
+
+
+def rebuild_category_totals(data):
+    totals = {}
+    for op in data.get('ops', []):
+        if op.get('is_debit'):
+            cat = op.get('cat', '')
+            totals[cat] = totals.get(cat, 0) + (op.get('amount', 0) or 0)
+    data['cats'] = [{'name': k, 'fact': round(v)}
+                    for k, v in sorted(totals.items(), key=lambda item: -item[1])]
+
+
 def merge_month_data(month: str, new_data: dict):
     """
     Добавляет операции из new_data в существующие данные месяца.
@@ -185,6 +202,19 @@ def merge_month_data(month: str, new_data: dict):
     if not existing or not existing.get('ops'):
         save_month_data(month, new_data)
         return
+
+    # Preserve only explicitly edited operations; unrelated/new payments retain
+    # their normal classification. Consume duplicates in their original order.
+    from collections import defaultdict, deque
+    prior = defaultdict(deque)
+    for op in existing['ops']:
+        prior[operation_identity(op)].append(op)
+    for op in new_data.get('ops', []):
+        matches = prior.get(operation_identity(op))
+        old = matches.popleft() if matches else None
+        if old and old.get('manual_cat'):
+            op['cat'] = old['cat']
+            op['manual_cat'] = True
 
     # Даты, покрытые новой выпиской
     new_dates = {op.get('date') for op in new_data.get('ops', []) if op.get('date')}
