@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Inspect Novator server without changes
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -20,9 +20,15 @@ jobs:
           command_timeout: 2m
           script: |
             set -eu
-            hostname
+            test "$(hostname -s)" = "8384475-da279743"
             cd /opt/zavod
-            printf 'SERVER_OK\n'
-            git rev-parse HEAD
-            systemctl is-active zavod.service
-            /opt/zavod/venv/bin/python -c "from dotenv import dotenv_values; c=dotenv_values('/opt/zavod/.env'); print({k: bool(c.get(k)) for k in ['EOVR_API_KEY','ADMIN_PASS','REPLICA_OF']})"
+            git status --short
+            systemctl show zavod.service --property=EnvironmentFiles
+            /opt/zavod/venv/bin/python - <<'PY'
+            import subprocess
+            from dotenv import dotenv_values
+            pid = subprocess.check_output(['systemctl','show','zavod.service','--property=MainPID','--value'],text=True).strip()
+            env = dict(x.split(b'=',1) for x in open('/proc/'+pid+'/environ','rb').read().split(b'\0') if b'=' in x)
+            print('runtime_settings:', {k:bool(env.get(k.encode())) for k in ['EOVR_API_KEY','ADMIN_PASS','REPLICA_OF']})
+            print('dotenv_settings:', {k:bool(dotenv_values('.env').get(k)) for k in ['EOVR_API_KEY','ADMIN_PASS']})
+            PY
