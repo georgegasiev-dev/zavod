@@ -1508,7 +1508,7 @@ async def reclassify_op(
 
 # ── справочник контрагентов ───────────────────────────────────────────────────
 @app.get("/api/contractor-ops")
-def get_contractor_ops(name: str = ""):
+def get_contractor_ops(name: str = "", _: str = Depends(verify_admin)):
     """
     Все операции конкретного контрагента по всем месяцам — для карточки
     контрагента в справочнике. Матчинг по нормализованному имени (lower+strip),
@@ -1532,7 +1532,7 @@ def get_contractor_ops(name: str = ""):
 
 
 @app.get("/api/contractors")
-def get_contractors():
+def get_contractors(_: str = Depends(verify_admin)):
     """Полный справочник контрагентов с суммами из ops."""
     from database import get_contractor_mappings, get_all_months
     db_map = get_contractor_mappings()  # {contractor: cat}
