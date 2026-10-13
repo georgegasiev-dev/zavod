@@ -1,0 +1,27 @@
+name: Login alert checks
+
+on:
+  pull_request:
+    paths:
+      - "main.py"
+      - "login_audit.py"
+      - "tests/test_login_audit.py"
+      - ".github/workflows/login-audit-tests.yml"
+  push:
+    paths:
+      - "main.py"
+      - "login_audit.py"
+      - "tests/test_login_audit.py"
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check Python syntax
+        run: python -m py_compile main.py login_audit.py
+      - name: Run login audit unit tests
+        run: python -m unittest discover -s tests -p 'test_login_audit.py' -v
