@@ -635,7 +635,7 @@ def _notify_owner(text: str):
         for attempt in range(3):
             try:
                 with urllib.request.urlopen(req, timeout=8) as response:
-                    result = _json.loads(response.read(1024).decode("utf-8"))
+                    result = _json.loads(response.read(65536).decode("utf-8"))
                 if result.get("ok"):
                     return
                 log.warning("Telegram API rejected alert (attempt %d)", attempt + 1)
