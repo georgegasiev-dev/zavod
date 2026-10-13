@@ -566,7 +566,16 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
 
 app = FastAPI(title="Новатор — Платёжный мониторинг", version="1.0.0", lifespan=lifespan)
-security = HTTPBasic()
+security = HTTPBasic(auto_error=False)
+
+
+async def _optional_basic(request: Request):
+    """Let login auditing see missing or malformed credentials as failures."""
+    try:
+        return await security(request)
+    except HTTPException:
+        return None
+
 
 # CORS — разрешаем все источники явно
 app.add_middleware(
@@ -580,54 +589,65 @@ app.add_middleware(
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "")
 
-def verify_admin(creds: HTTPBasicCredentials = Depends(security), request: Request = None):
-    ok = (bool(ADMIN_PASS) and secrets.compare_digest(creds.username.encode(), ADMIN_USER.encode()) and
-          secrets.compare_digest(creds.password.encode(), ADMIN_PASS.encode()))
+def verify_admin(creds: HTTPBasicCredentials = Depends(_optional_basic), request: Request = None):
+    """Do not mistake ordinary API traffic for a fresh login."""
+    username = creds.username if creds else ""
+    password = creds.password if creds else ""
+    ok = (
+        bool(ADMIN_PASS) and bool(creds)
+        and secrets.compare_digest(username.encode(), ADMIN_USER.encode())
+        and secrets.compare_digest(password.encode(), ADMIN_PASS.encode())
+    )
+
+    # Current website validates passwords via this endpoint; ordinary protected
+    # API calls reuse Basic credentials and are NOT new logins.
+    is_login_attempt = bool(request and request.url.path == "/api/raiffeisen/status")
+    if is_login_attempt:
+        from login_audit import record_and_alert
+        record_and_alert(request, username, ok, log_access, _notify_owner)
+
     if not ok:
-        ip = request.headers.get("x-forwarded-for", request.client.host if request and request.client else "—")
-        log_access("login_failed", ip, f"Пользователь: {creds.username}")
-        _notify_login(f"⚠️ <b>Неудачная попытка входа</b>\nПользователь: {creds.username}\nIP: {ip}", ip)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            headers={"WWW-Authenticate": "Basic"})
-    ip = request.headers.get("x-forwarded-for", request.client.host if request and request.client else "—") if request else "—"
-    log_access("login_ok", ip, f"Пользователь: {creds.username}")
-    _notify_owner(f"🔑 <b>Вход в систему</b>\nПользователь: {creds.username}\nIP: {ip}")
-    return creds.username
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return username
 
 # ── публичные эндпоинты ───────────────────────────────────────────────────────
 
-# Кэш для дедупликации уведомлений о НЕУДАЧНЫХ попытках входа: {ip: последнее_время}
-# (успешные входы уведомляются всегда, без дедупликации — см. verify_admin)
-_login_notify_cache: dict[str, datetime] = {}
-_LOGIN_DEDUP_SECONDS = 300  # 5 минут
-
-
 def _notify_owner(text: str):
-    """Отправляет уведомление владельцу в Telegram (не блокирует)."""
-    import threading, urllib.request, json as _json
-    tg_token  = os.getenv("TG_TOKEN", "")
+    """Send a Telegram alert without delaying an HTTP request.
+
+    Every login gets its own message (no five-minute suppression). Do not
+    include Telegram's token-bearing URL in error logs.
+    """
+    import threading, urllib.request, time, json as _json
+    tg_token = os.getenv("TG_TOKEN", "")
     owner_cid = os.getenv("TG_CHAT_ID", "")
     if not tg_token or not owner_cid:
+        log.warning("Telegram alert unavailable: TG_TOKEN / TG_CHAT_ID not configured")
         return
+
     def _send():
-        try:
-            url  = f"https://api.telegram.org/bot{tg_token}/sendMessage"
-            data = _json.dumps({"chat_id": owner_cid, "text": text, "parse_mode": "HTML"}).encode()
-            req  = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=8)
-        except Exception:
-            pass
+        url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+        data = _json.dumps({"chat_id": owner_cid, "text": text, "parse_mode": "HTML"}).encode()
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=8) as response:
+                    result = _json.loads(response.read(1024).decode("utf-8"))
+                if result.get("ok"):
+                    return
+                log.warning("Telegram API rejected alert (attempt %d)", attempt + 1)
+            except Exception as exc:
+                # Exception messages may include the bot token in the URL.
+                log.warning("Telegram alert failed: %s (attempt %d)",
+                            type(exc).__name__, attempt + 1)
+            if attempt < 2:
+                time.sleep(1 + attempt)
+        log.error("Telegram alert could not be delivered after 3 attempts")
+
     threading.Thread(target=_send, daemon=True).start()
-
-
-def _notify_login(text: str, ip: str):
-    """Уведомление о неудачной попытке входа с дедупликацией: одно сообщение на IP раз в 5 минут."""
-    now = datetime.now()
-    last = _login_notify_cache.get(ip)
-    if last and (now - last).total_seconds() < _LOGIN_DEDUP_SECONDS:
-        return
-    _login_notify_cache[ip] = now
-    _notify_owner(text)
 
 
 @app.get("/api/data")
