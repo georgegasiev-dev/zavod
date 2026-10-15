@@ -111,11 +111,10 @@ class IdentityTests(unittest.TestCase):
             data = canonicalize_data(conn, {'ops': [op(AYRA), op('renamed, ИНН: 522802685180'),
                                                     op('another company'), op('another company, ИНН: 7820078617')]})
             self.assertEqual(data['ops'][0]['contractor_id'], data['ops'][1]['contractor_id'])
-            self.assertNotIn('contractor_id', data['ops'][2])
+            self.assertEqual(data['ops'][2]['contractor_id'], data['ops'][3]['contractor_id'])
             self.assertNotEqual(data['ops'][1]['contractor_id'], data['ops'][3]['contractor_id'])
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM contractor_entities WHERE inn='522802685180'").fetchone()[0], 1)
-            with self.assertRaises(ValueError):
-                resolve(conn, AYRA, '7820078617', True)
+            self.assertEqual(resolve(conn, AYRA, '7820078617', True)[2], '7820078617')
 
     def test_identical_names_with_separate_inns_stay_distinct(self):
         with sqlite3.connect(self.path) as conn:

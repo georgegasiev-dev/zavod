@@ -58,6 +58,8 @@ def _init():
 # accepting requests or its scheduled bank imports start writing.
 from migrate_contractors import apply_reviewed
 _identity_migration = apply_reviewed(DB_PATH)
+from bulk_contractors import apply_all
+_all_identity_migration = apply_all(DB_PATH)
 _init()
 
 
@@ -82,7 +84,7 @@ def get_contractor_key_resolver():
 
 def contractor_identity_status():
     """Non-sensitive migration evidence for deployment verification."""
-    from migrate_contractors import MIGRATION
+    from bulk_contractors import MIGRATION
     with _conn() as conn:
         exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='contractor_merge_log'").fetchone()
         row = conn.execute('SELECT report FROM contractor_merge_log WHERE migration=?',
@@ -93,7 +95,9 @@ def contractor_identity_status():
     return {'migration': MIGRATION, 'applied': True,
             'backup_sha256': report['backup_sha256'],
             'operations_updated': report['operations_updated'],
-            'payment_fields_unchanged': report['payment_fields_unchanged']}
+            'payment_fields_unchanged': report['payment_fields_unchanged'],
+            **{key: report[key] for key in ('cards_before','cards_after','groups_merged',
+                'operations_verified','months_verified','remaining_duplicate_keys') if key in report}}
 
 
 def fssp_get_seen() -> set:
@@ -278,7 +282,7 @@ def _merge_month_data_locked(conn, month, new_data):
     consumed = set()
     for op in existing['ops']:
         prior[operation_identity(op)].append(op)
-        if not op.get('contractor_id') and len(op.get('contractor', '')) == 60:
+        if (not op.get('contractor_id') or op['contractor_id'].startswith('name:')) and len(op.get('contractor_original') or op.get('contractor', '')) == 60:
             legacy[_legacy_operation_identity(op)].append(op)
     for op in new_data.get('ops', []):
         incoming_identities[_legacy_operation_identity(op)].add(operation_identity(op)[1])

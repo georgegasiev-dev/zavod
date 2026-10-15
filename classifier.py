@@ -6,7 +6,7 @@ try:
     from database import get_contractor_mappings, get_contractor_name_resolver
 except ImportError:
     def get_contractor_mappings(): return {}
-    def get_contractor_name_resolver(): return lambda name: name
+    def get_contractor_name_resolver(): return lambda name, inn=None: name
 
 # Справочник контрагентов → категория
 MANUAL_MAP = {
@@ -207,7 +207,7 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
                 if raw_inn.endswith('.0'):
                     raw_inn = raw_inn[:-2]
                 inn = extract_inn(raw_inn)
-            contractor = resolve_contractor_name(contractor)
+            contractor = resolve_contractor_name(contractor, inn)
             desc       = str(row.get(desc_col,  '') or '')
             date_val   = row.get(date_col)
             # Кредитные операции — всегда "Поступления от клиентов"
