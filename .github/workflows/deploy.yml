@@ -8,6 +8,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Check out deployed source
+        uses: actions/checkout@v4
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -15,7 +17,11 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            set -e
             cd /opt/zavod
-            git pull origin main
+            git pull --ff-only origin main
             systemctl restart zavod
             echo "Deploy OK"
+
+      - name: Verify counterparty consolidation and payment invariants
+        run: python verify_contractor_deployment.py
