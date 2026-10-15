@@ -16,6 +16,9 @@ import pandas as pd, io, json, secrets, os, logging
 from datetime import datetime
 from classifier import classify_operations
 from database import (save_month_data, merge_month_data, get_month_data, get_all_months,
+                       get_contractor_details, contractor_key, resolve_contractor_name,
+                       contractor_identity_status,
+                       get_contractor_name_resolver, get_contractor_key_resolver,
                        get_last_upload, save_contractor_mapping, save_contractor_comment,
                        save_plan, get_plan, get_all_plans,
                        get_obligations, save_obligation,
@@ -788,7 +791,8 @@ def get_status():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "time": datetime.now().isoformat()}
+    return {"status": "ok", "time": datetime.now().isoformat(),
+            "contractor_identity": contractor_identity_status()}
 
 @app.post("/api/report")
 async def manual_report(_: str = Depends(verify_admin)):
@@ -1423,8 +1427,9 @@ async def reclassify_op(
     Если не переданы — меняет все операции контрагента + сохраняет в справочник (устаревший режим).
     payload = {month, contractor, new_cat, [date], [amount]}
     """
+    contractor_key = get_contractor_key_resolver()
     month      = payload.get("month")
-    contractor = ' '.join((payload.get("contractor") or "").lower().strip().split())
+    contractor = contractor_key(payload.get("contractor") or "")
     new_cat    = payload.get("new_cat", "")
     op_date    = payload.get("date")     # если задано — одиночная операция
     op_amount  = payload.get("amount")   # если задано — одиночная операция
@@ -1441,7 +1446,7 @@ async def reclassify_op(
         # Меняем только одну конкретную операцию в данном месяце (без сохранения в справочник)
         data = all_data.get(month, {})
         for op in data.get("ops", []):
-            c_match = ' '.join((op.get("contractor") or "").lower().strip().split()) == contractor
+            c_match = contractor_key(op.get("contractor") or "") == contractor
             d_match = str(op.get("date", ""))[:10] == str(op_date)[:10]
             a_match = abs(float(op.get("amount", 0)) - float(op_amount)) < 0.5
             if c_match and d_match and a_match:
@@ -1458,7 +1463,7 @@ async def reclassify_op(
         for m, data in all_data.items():
             month_changed = False
             for op in data.get("ops", []):
-                if ' '.join((op.get("contractor") or "").lower().strip().split()) == contractor:
+                if contractor_key(op.get("contractor") or "") == contractor:
                     op["cat"] = new_cat
                     changed += 1
                     month_changed = True
@@ -1479,7 +1484,8 @@ def get_contractor_ops(name: str = ""):
     так же как /api/contractors и save_contractor_mapping.
     """
     from database import get_all_months
-    name_norm = (name or "").strip().lower()
+    contractor_key = get_contractor_key_resolver()
+    name_norm = contractor_key(name)
     if not name_norm:
         return {"ops": []}
 
@@ -1487,7 +1493,7 @@ def get_contractor_ops(name: str = ""):
     result = []
     for month, month_data in all_data.items():
         for op in month_data.get('ops', []):
-            c = (op.get('contractor') or '').strip().lower()
+            c = contractor_key(op.get('contractor') or '')
             if c == name_norm:
                 result.append({**op, "_month": month})
 
@@ -1499,6 +1505,7 @@ def get_contractor_ops(name: str = ""):
 def get_contractors():
     """Полный справочник контрагентов с суммами из ops."""
     from database import get_contractor_mappings, get_all_months
+    resolve_contractor_name = get_contractor_name_resolver()
     db_map = get_contractor_mappings()  # {contractor: cat}
     all_data = get_all_months()
 
@@ -1508,10 +1515,10 @@ def get_contractors():
         for op in month_data.get('ops', []):
             if not op.get('is_debit'):
                 continue
-            c = (op.get('contractor') or '').strip()
+            c = resolve_contractor_name((op.get('contractor') or '').strip())
             if not c:
                 continue
-            cl = c.lower()
+            cl = ' '.join(c.lower().split())
             if cl not in contractor_stats:
                 contractor_stats[cl] = {
                     'name': c,
@@ -1546,7 +1553,8 @@ async def update_contractor(
     _: str = Depends(verify_admin),
 ):
     """Обновить категорию и/или комментарий контрагента."""
-    contractor = ' '.join((payload.get("contractor") or "").lower().strip().split())
+    contractor_key = get_contractor_key_resolver()
+    contractor = contractor_key(payload.get("contractor") or "")
     new_cat = payload.get("cat")
     comment = payload.get("comment")
     if not contractor:
@@ -1558,7 +1566,7 @@ async def update_contractor(
         for month, data in all_data.items():
             changed = False
             for op in data.get('ops', []):
-                if ' '.join((op.get('contractor') or '').lower().strip().split()) == contractor:
+                if contractor_key(op.get('contractor') or '') == contractor:
                     op['cat'] = new_cat
                     changed = True
             if changed:
@@ -2033,7 +2041,7 @@ VALID_CATS = ['Лес','Перевозка леса','Смола','Плёнка'
               'Вывоз мусора','НДС','НДФЛ','Упаковка','Перевозчик','ЗП','Аренда',
               'Адм.','Поступления от клиентов','Прочие нераспознанные']
 
-def _norm(s): return ' '.join((s or '').lower().strip().split())
+def _norm(s): return contractor_key(s)
 
 def _call_tool(name: str, args: dict) -> str:
     from database import (get_month_data, get_all_months, get_contractor_mappings,

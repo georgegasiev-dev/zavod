@@ -1,6 +1,8 @@
 """SQLite хранилище данных."""
 import sqlite3, json, os
+from contextlib import nullcontext, contextmanager
 from datetime import datetime
+from contractor_identity import canonicalize_data, canonical_name, name_resolver
 
 DB_PATH = os.getenv("DB_PATH", "data/novator.db")
 
@@ -8,11 +10,16 @@ def _norm(name: str) -> str:
     """Нормализует имя контрагента — так же, как _classify в classifier.py."""
     return ' '.join((name or '').lower().strip().split())
 
+@contextmanager
 def _conn():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=60)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 def _init():
     with _conn() as conn:
@@ -47,7 +54,46 @@ def _init():
         """)  # ponytail: только номер ИП + дата обнаружения
         conn.commit()
 
+# Existing databases are backed up and migrated before the application starts
+# accepting requests or its scheduled bank imports start writing.
+from migrate_contractors import apply_reviewed
+_identity_migration = apply_reviewed(DB_PATH)
 _init()
+
+
+def resolve_contractor_name(name):
+    with _conn() as conn:
+        return canonical_name(conn, name)
+
+
+def contractor_key(name):
+    return _norm(resolve_contractor_name(name))
+
+
+def get_contractor_name_resolver():
+    with _conn() as conn:
+        return name_resolver(conn)
+
+
+def get_contractor_key_resolver():
+    resolve_name = get_contractor_name_resolver()
+    return lambda name: _norm(resolve_name(name))
+
+
+def contractor_identity_status():
+    """Non-sensitive migration evidence for deployment verification."""
+    from migrate_contractors import MIGRATION
+    with _conn() as conn:
+        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='contractor_merge_log'").fetchone()
+        row = conn.execute('SELECT report FROM contractor_merge_log WHERE migration=?',
+                           (MIGRATION,)).fetchone() if exists else None
+    if not row:
+        return {'migration': MIGRATION, 'applied': False}
+    report = json.loads(row['report'])
+    return {'migration': MIGRATION, 'applied': True,
+            'backup_sha256': report['backup_sha256'],
+            'operations_updated': report['operations_updated'],
+            'payment_fields_unchanged': report['payment_fields_unchanged']}
 
 
 def fssp_get_seen() -> set:
@@ -78,9 +124,12 @@ def get_setting(key: str, default: str = None) -> str:
         row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
     return row['value'] if row else default
 
-def save_month_data(month: str, data: dict):
+def save_month_data(month: str, data: dict, _connection=None):
     now = datetime.now().isoformat()
-    with _conn() as conn:
+    with (nullcontext(_connection) if _connection is not None else _conn()) as conn:
+        if not conn.in_transaction:
+            conn.execute('BEGIN IMMEDIATE')
+        data = canonicalize_data(conn, data)
         conn.execute("""
             INSERT INTO month_data (month, data, updated_at)
             VALUES (?, ?, ?)
@@ -91,7 +140,8 @@ def save_month_data(month: str, data: dict):
             INSERT INTO upload_log (month, source, ops_count, unknown, created_at)
             VALUES (?, ?, ?, ?, ?)
         """, (month, data.get('source','manual'), data.get('total_ops',0), len(data.get('unknown',[])), now))
-        conn.commit()
+        if _connection is None:
+            conn.commit()
 
 def get_month_data(month: str) -> dict:
     with _conn() as conn:
@@ -125,7 +175,7 @@ def save_contractor_mapping(contractor: str, cat: str):
             INSERT INTO contractor_map (contractor, cat, updated_at)
             VALUES (?, ?, datetime('now'))
             ON CONFLICT(contractor) DO UPDATE SET cat=excluded.cat, updated_at=excluded.updated_at
-        """, (_norm(contractor), cat))
+        """, (_norm(canonical_name(conn, contractor)), cat))
         conn.commit()
 
 
@@ -171,14 +221,22 @@ def save_contractor_comment(contractor: str, comment: str):
             INSERT INTO contractor_details (contractor, comment, added_at)
             VALUES (?, ?, datetime('now'))
             ON CONFLICT(contractor) DO UPDATE SET comment=excluded.comment
-        """, (_norm(contractor), comment))
+        """, (_norm(canonical_name(conn, contractor)), comment))
         conn.commit()
 
 
 def operation_identity(op):
     """Exact bank-operation identity for preserving an explicit manual category."""
     from decimal import Decimal
-    return (str(op.get('date', '')), op.get('contractor', ''),
+    return (str(op.get('date', '')), op.get('contractor_id') or _norm(op.get('contractor', '')),
+            Decimal(str(op.get('amount', 0))), op.get('desc', ''), bool(op.get('is_debit')))
+
+
+def _legacy_operation_identity(op):
+    """For pre-change bank labels truncated to 60 characters, without an INN."""
+    from decimal import Decimal
+    name = op.get('contractor_original') or op.get('contractor', '')
+    return (str(op.get('date', '')), _norm(name[:60]),
             Decimal(str(op.get('amount', 0))), op.get('desc', ''), bool(op.get('is_debit')))
 
 
@@ -193,25 +251,50 @@ def rebuild_category_totals(data):
 
 
 def merge_month_data(month: str, new_data: dict):
+    with _conn() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        _merge_month_data_locked(conn, month, new_data)
+
+
+def _merge_month_data_locked(conn, month, new_data):
     """
     Добавляет операции из new_data в существующие данные месяца.
     Операции за даты, уже присутствующие в БД, заменяются новыми.
     Старые даты (загруженные вручную ранее) сохраняются.
     """
-    existing = get_month_data(month)
+    row = conn.execute('SELECT data FROM month_data WHERE month=?', (month,)).fetchone()
+    existing = canonicalize_data(conn, json.loads(row['data'])) if row else {}
+    new_data = canonicalize_data(conn, new_data)
     if not existing or not existing.get('ops'):
-        save_month_data(month, new_data)
+        save_month_data(month, new_data, _connection=conn)
         return
 
     # Preserve only explicitly edited operations; unrelated/new payments retain
     # their normal classification. Consume duplicates in their original order.
     from collections import defaultdict, deque
     prior = defaultdict(deque)
+    legacy = defaultdict(deque)
+    incoming_identities = defaultdict(set)
+    consumed = set()
     for op in existing['ops']:
         prior[operation_identity(op)].append(op)
+        if not op.get('contractor_id') and len(op.get('contractor', '')) == 60:
+            legacy[_legacy_operation_identity(op)].append(op)
+    for op in new_data.get('ops', []):
+        incoming_identities[_legacy_operation_identity(op)].add(operation_identity(op)[1])
     for op in new_data.get('ops', []):
         matches = prior.get(operation_identity(op))
+        while matches and id(matches[0]) in consumed:
+            matches.popleft()
         old = matches.popleft() if matches else None
+        legacy_key = _legacy_operation_identity(op)
+        if old is None and len(incoming_identities[legacy_key]) == 1:
+            matches = legacy.get(legacy_key)
+            while matches and id(matches[0]) in consumed:
+                matches.popleft()
+            old = matches.popleft() if matches else None
+        if old:
+            consumed.add(id(old))
         if old and old.get('manual_cat'):
             op['cat'] = old['cat']
             op['manual_cat'] = True
@@ -257,7 +340,7 @@ def merge_month_data(month: str, new_data: dict):
         'source':    'merged',
     }
 
-    save_month_data(month, merged)
+    save_month_data(month, merged, _connection=conn)
 
 
 

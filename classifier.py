@@ -1,10 +1,12 @@
 """Классификация операций из банковской выписки Райффайзен."""
 import pandas as pd, re
+from contractor_identity import extract_inn
 from datetime import datetime
 try:
-    from database import get_contractor_mappings
+    from database import get_contractor_mappings, get_contractor_name_resolver
 except ImportError:
     def get_contractor_mappings(): return {}
+    def get_contractor_name_resolver(): return lambda name: name
 
 # Справочник контрагентов → категория
 MANUAL_MAP = {
@@ -126,8 +128,9 @@ def _classify(contractor: str, description: str, db_map: dict = None) -> str:
     # Сначала проверяем пользовательский справочник из БД
     if db_map and c in db_map:
         return db_map[c]
-    if c in MANUAL_MAP:
-        return MANUAL_MAP[c]
+    base = re.sub(r',?\s*инн\s*:\s*\d+\s*$', '', c).strip()
+    if c in MANUAL_MAP or base in MANUAL_MAP:
+        return MANUAL_MAP.get(c, MANUAL_MAP.get(base))
     for cat, pattern in KEYWORDS:
         if re.search(pattern, d):
             return cat
@@ -156,6 +159,7 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
     date_col   = _find_col(df, 'дата')
     type_col   = _find_col(df, 'тип')
     contr_col  = _find_col(df, 'контраг', 'получат', 'плательщ')
+    inn_col    = _find_col(df, 'инн контраг', 'инн получат', 'инн плательщ', 'инн')
     debit_col  = _find_col(df, 'дебет', 'расход', 'списан')
     credit_col = _find_col(df, 'кредит', 'приход', 'зачис')
     desc_col   = _find_col(df, 'назначен', 'описани', 'основани')
@@ -167,6 +171,7 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
     unknown    = []
 
     db_map = get_contractor_mappings()
+    resolve_contractor_name = get_contractor_name_resolver()
     for _, row in df.iterrows():
         try:
             raw_debit  = float(row.get(debit_col,  0) or 0) if debit_col  else 0.0
@@ -195,6 +200,14 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
             contractor = '' if (raw_contr is None or str(raw_contr).strip().lower() == 'nan') else str(raw_contr)
             # Заменяем ИНН на читаемое имя контрагента
             contractor = INN_TO_NAME.get(contractor.strip(), contractor)
+            original_contractor = contractor
+            inn = extract_inn(contractor)
+            if not inn and inn_col:
+                raw_inn = str(row.get(inn_col, '')).strip()
+                if raw_inn.endswith('.0'):
+                    raw_inn = raw_inn[:-2]
+                inn = extract_inn(raw_inn)
+            contractor = resolve_contractor_name(contractor)
             desc       = str(row.get(desc_col,  '') or '')
             date_val   = row.get(date_col)
             # Кредитные операции — всегда "Поступления от клиентов"
@@ -215,14 +228,16 @@ def classify_operations(df: pd.DataFrame, month: str) -> dict:
                     weeks_out[wi] += amt
                 cat_totals[cat] = cat_totals.get(cat, 0.0) + amt
                 if cat == 'Прочее':
-                    unknown.append({'contractor': contractor[:80], 'desc': desc[:80], 'amount': round(amt)})
+                    unknown.append({'contractor': contractor, 'desc': desc[:80], 'amount': round(amt)})
             else:
                 if 0 <= wi < 5:
                     weeks_in[wi] += amt
                 cat_totals[cat] = cat_totals.get(cat, 0.0) + amt
 
             ops.append({
-                'date': date_str, 'contractor': contractor[:60],
+                'date': date_str, 'contractor': contractor,
+                'contractor_original': original_contractor,
+                **({'contractor_inn': inn} if inn else {}),
                 'desc': desc[:80], 'amount': round(amt),
                 'cat': cat, 'week': wi, 'is_debit': is_debit,
             })
