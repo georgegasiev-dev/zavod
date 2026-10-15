@@ -148,6 +148,16 @@ class IdentityTests(unittest.TestCase):
             database.save_contractor_comment(AYRA, 'edited through old name')
             canonical = after['ops'][0]['contractor'].lower()
             self.assertEqual(database.get_contractor_details()[canonical]['comment'], 'edited through old name')
+            long_name = 'ООО "Очень длинное название организации для проверки прежнего обрезанного имени", ИНН: 7820078617'
+            legacy_op = op(long_name[:60], manual_cat=True)
+            database.save_month_data('legacy-only', {'ops': [legacy_op]})
+            fresh_op = op(long_name)
+            fresh_op['cat'] = 'Вывоз мусора'
+            database.merge_month_data('legacy-only', {'ops': [fresh_op]})
+            restored = database.get_month_data('legacy-only')['ops']
+            self.assertEqual(len(restored), 1)
+            self.assertEqual(restored[0]['cat'], 'Лес')
+            self.assertTrue(restored[0]['manual_cat'])
         finally:
             if previous is None:
                 os.environ.pop('DB_PATH', None)

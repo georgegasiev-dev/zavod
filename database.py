@@ -232,6 +232,14 @@ def operation_identity(op):
             Decimal(str(op.get('amount', 0))), op.get('desc', ''), bool(op.get('is_debit')))
 
 
+def _legacy_operation_identity(op):
+    """For pre-change bank labels truncated to 60 characters, without an INN."""
+    from decimal import Decimal
+    name = op.get('contractor_original') or op.get('contractor', '')
+    return (str(op.get('date', '')), _norm(name[:60]),
+            Decimal(str(op.get('amount', 0))), op.get('desc', ''), bool(op.get('is_debit')))
+
+
 def rebuild_category_totals(data):
     totals = {}
     for op in data.get('ops', []):
@@ -265,11 +273,28 @@ def _merge_month_data_locked(conn, month, new_data):
     # their normal classification. Consume duplicates in their original order.
     from collections import defaultdict, deque
     prior = defaultdict(deque)
+    legacy = defaultdict(deque)
+    incoming_identities = defaultdict(set)
+    consumed = set()
     for op in existing['ops']:
         prior[operation_identity(op)].append(op)
+        if not op.get('contractor_id') and len(op.get('contractor', '')) == 60:
+            legacy[_legacy_operation_identity(op)].append(op)
+    for op in new_data.get('ops', []):
+        incoming_identities[_legacy_operation_identity(op)].add(operation_identity(op)[1])
     for op in new_data.get('ops', []):
         matches = prior.get(operation_identity(op))
+        while matches and id(matches[0]) in consumed:
+            matches.popleft()
         old = matches.popleft() if matches else None
+        legacy_key = _legacy_operation_identity(op)
+        if old is None and len(incoming_identities[legacy_key]) == 1:
+            matches = legacy.get(legacy_key)
+            while matches and id(matches[0]) in consumed:
+                matches.popleft()
+            old = matches.popleft() if matches else None
+        if old:
+            consumed.add(id(old))
         if old and old.get('manual_cat'):
             op['cat'] = old['cat']
             op['manual_cat'] = True
