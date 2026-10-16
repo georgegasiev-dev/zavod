@@ -455,18 +455,31 @@ def log_access(action: str, ip: str = "—", details: str = ""):
         conn.commit()
 
 
-def get_access_log(limit: int = 50) -> list[dict]:
-    """Возвращает последние записи лога доступа."""
+def get_access_log(limit: int = 50, only_logins: bool = False, before_id: int = None) -> list[dict]:
+    """Paginated access audit. Historical login_ok events are API requests, not true sign-ins."""
     with _conn() as conn:
         try:
-            rows = conn.execute("""
-                SELECT id, action, ip, details, created_at
-                FROM access_log
-                ORDER BY id DESC
-                LIMIT ?
-            """, (limit,)).fetchall()
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS access_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    action TEXT NOT NULL, ip TEXT DEFAULT '—',
+                    details TEXT DEFAULT '', created_at TEXT NOT NULL
+                )
+            """)
+            filters, args = [], []
+            if only_logins:
+                filters.append("action IN ('login_success','login_denied','session_resume')")
+            if before_id is not None:
+                filters.append("id < ?")
+                args.append(before_id)
+            where = " WHERE " + " AND ".join(filters) if filters else ""
+            args.append(max(1, min(int(limit), 2000)))
+            rows = conn.execute(
+                "SELECT id, action, ip, details, created_at FROM access_log" +
+                where + " ORDER BY id DESC LIMIT ?", args
+            ).fetchall()
             return [dict(r) for r in rows]
-        except Exception:
+        except sqlite3.Error:
             return []
 
 
