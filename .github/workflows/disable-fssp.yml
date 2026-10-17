@@ -1,0 +1,177 @@
+name: Disable and verify FSSP monitoring
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/disable-fssp.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  main-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Disable FSSP and verify main server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 3m
+          script: |
+            set -e
+            cd /opt/zavod
+            python3 - <<'PY'
+            import ast
+            import os
+            import shutil
+            import subprocess
+            import tempfile
+            import time
+            from datetime import datetime
+            from pathlib import Path
+            
+            path = Path('/opt/zavod/main.py')
+            source = path.read_text(encoding='utf-8')
+            tree = ast.parse(source)
+            lines = source.splitlines(keepends=True)
+            edits = []
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == 'scheduled_fssp_check':
+                    indent = ' ' * node.col_offset
+                    edits.append((node.lineno - 1, node.end_lineno, indent + 'async def scheduled_fssp_check():\n' + indent + '    """FSSP monitoring disabled by owner."""\n' + indent + '    return\n'))
+                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                    call = node.value
+                    if isinstance(call.func, ast.Attribute) and call.func.attr == 'add_job':
+                        handler = any(isinstance(arg, ast.Name) and arg.id == 'scheduled_fssp_check' for arg in call.args)
+                        job_id = any(kw.arg == 'id' and isinstance(kw.value, ast.Constant) and kw.value.value == 'fssp_check' for kw in call.keywords)
+                        if handler or job_id:
+                            edits.append((node.lineno - 1, node.end_lineno, ' ' * node.col_offset + 'pass  # FSSP monitoring disabled by owner.\n'))
+            for start, end, replacement in sorted(edits, reverse=True):
+                lines[start:end] = [replacement]
+            updated = ''.join(lines)
+            ast.parse(updated)
+            assert 'from fssp_monitor import check_fssp' not in updated, 'Unexpected FSSP call site; abort'
+            for node in ast.walk(ast.parse(updated)):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'add_job':
+                    assert not any(isinstance(arg, ast.Name) and arg.id == 'scheduled_fssp_check' for arg in node.args)
+                    assert not any(kw.arg == 'id' and isinstance(kw.value, ast.Constant) and kw.value.value == 'fssp_check' for kw in node.keywords)
+            changed = updated != source
+            if changed:
+                backup = path.with_name('main.py.before-disable-fssp-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '.bak')
+                shutil.copy2(path, backup)
+                meta = path.stat()
+                fd, temporary = tempfile.mkstemp(prefix='.disable-fssp-', dir=path.parent)
+                try:
+                    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+                        stream.write(updated)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.chmod(temporary, meta.st_mode & 0o777)
+                    os.chown(temporary, meta.st_uid, meta.st_gid)
+                    assert path.read_text(encoding='utf-8') == source, 'File changed during update'
+                    os.replace(temporary, path)
+                finally:
+                    if os.path.exists(temporary):
+                        os.unlink(temporary)
+                try:
+                    subprocess.run(['systemctl', 'restart', 'zavod.service'], check=True, timeout=60)
+                except BaseException:
+                    shutil.copy2(backup, path)
+                    subprocess.run(['systemctl', 'restart', 'zavod.service'], timeout=60)
+                    raise
+                print('FSSP_DISABLED: patched and restarted')
+            else:
+                print('FSSP_DISABLED: already deployed')
+            time.sleep(3)
+            subprocess.run(['systemctl', 'is-active', '--quiet', 'zavod.service'], check=True)
+            print('SERVICE_ACTIVE: yes')
+            print('FSSP_JOB_REGISTERED: no')
+            print('SOURCE_SYNTAX: valid')
+            PY
+
+  bot-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Disable FSSP and verify bot server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 45.8.98.214
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 3m
+          script: |
+            set -e
+            cd /opt/zavod
+            python3 - <<'PY'
+            import ast
+            import os
+            import shutil
+            import subprocess
+            import tempfile
+            import time
+            from datetime import datetime
+            from pathlib import Path
+            
+            path = Path('/opt/zavod/main.py')
+            source = path.read_text(encoding='utf-8')
+            tree = ast.parse(source)
+            lines = source.splitlines(keepends=True)
+            edits = []
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == 'scheduled_fssp_check':
+                    indent = ' ' * node.col_offset
+                    edits.append((node.lineno - 1, node.end_lineno, indent + 'async def scheduled_fssp_check():\n' + indent + '    """FSSP monitoring disabled by owner."""\n' + indent + '    return\n'))
+                if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+                    call = node.value
+                    if isinstance(call.func, ast.Attribute) and call.func.attr == 'add_job':
+                        handler = any(isinstance(arg, ast.Name) and arg.id == 'scheduled_fssp_check' for arg in call.args)
+                        job_id = any(kw.arg == 'id' and isinstance(kw.value, ast.Constant) and kw.value.value == 'fssp_check' for kw in call.keywords)
+                        if handler or job_id:
+                            edits.append((node.lineno - 1, node.end_lineno, ' ' * node.col_offset + 'pass  # FSSP monitoring disabled by owner.\n'))
+            for start, end, replacement in sorted(edits, reverse=True):
+                lines[start:end] = [replacement]
+            updated = ''.join(lines)
+            ast.parse(updated)
+            assert 'from fssp_monitor import check_fssp' not in updated, 'Unexpected FSSP call site; abort'
+            for node in ast.walk(ast.parse(updated)):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'add_job':
+                    assert not any(isinstance(arg, ast.Name) and arg.id == 'scheduled_fssp_check' for arg in node.args)
+                    assert not any(kw.arg == 'id' and isinstance(kw.value, ast.Constant) and kw.value.value == 'fssp_check' for kw in node.keywords)
+            changed = updated != source
+            if changed:
+                backup = path.with_name('main.py.before-disable-fssp-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '.bak')
+                shutil.copy2(path, backup)
+                meta = path.stat()
+                fd, temporary = tempfile.mkstemp(prefix='.disable-fssp-', dir=path.parent)
+                try:
+                    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+                        stream.write(updated)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.chmod(temporary, meta.st_mode & 0o777)
+                    os.chown(temporary, meta.st_uid, meta.st_gid)
+                    assert path.read_text(encoding='utf-8') == source, 'File changed during update'
+                    os.replace(temporary, path)
+                finally:
+                    if os.path.exists(temporary):
+                        os.unlink(temporary)
+                try:
+                    subprocess.run(['systemctl', 'restart', 'zavod.service'], check=True, timeout=60)
+                except BaseException:
+                    shutil.copy2(backup, path)
+                    subprocess.run(['systemctl', 'restart', 'zavod.service'], timeout=60)
+                    raise
+                print('FSSP_DISABLED: patched and restarted')
+            else:
+                print('FSSP_DISABLED: already deployed')
+            time.sleep(3)
+            subprocess.run(['systemctl', 'is-active', '--quiet', 'zavod.service'], check=True)
+            print('SERVICE_ACTIVE: yes')
+            print('FSSP_JOB_REGISTERED: no')
+            print('SOURCE_SYNTAX: valid')
+            PY
