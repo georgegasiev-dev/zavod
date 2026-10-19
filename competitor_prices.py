@@ -173,7 +173,7 @@ def collect_and_save_if_due() -> bool:
         if elapsed < _MANUAL_COLLECT_COOLDOWN_SECONDS:
             return False
     _last_manual_collect = now
-    collect_and_save()
+    collect_and_notify_changes()
     return True
 
 
@@ -192,6 +192,19 @@ def collect_and_save() -> int:
         conn.commit()
     conn.close()
     return len(valid_rows)
+
+
+def collect_and_notify_changes() -> bool:
+    """Unified collection/notification path for scheduled, site and bot refreshes."""
+    import logging
+    from telegram_reporter import _tg_send
+    report = collect_and_report_changes()
+    if not report:
+        return False
+    sent = _tg_send(report)
+    if not sent:
+        logging.getLogger(__name__).error("Competitor price alert detected but Telegram delivery failed")
+    return sent
 
 
 def collect_and_report_changes() -> str | None:
@@ -244,10 +257,10 @@ def collect_and_report_changes() -> str | None:
 
 
 def build_rynok_report() -> str:
+    collect_and_notify_changes()
     conn = _get_conn()
-    rows = _collect_rows()
 
-    valid_rows = [r for r in rows if r["price_per_sheet"] is not None]
+    valid_rows = []  # collection and persistence already completed by unified path
     if valid_rows:
         conn.executemany(
             """INSERT INTO competitor_prices (site, variant, price_per_sheet, in_stock, parsed_at)
