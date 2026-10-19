@@ -308,9 +308,4 @@ def build_rynok_report() -> str:
             lines.append(f"  {variant}: {price}₽{stock_note}{trend}")
         lines.append("")
 
-    if errored:
-        lines.append("⚠️ Не удалось собрать:")
-        for r in errored:
-            lines.append(f"  {r['site']}: {r['variant']}")
-
     return "\n".join(lines).strip()
