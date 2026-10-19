@@ -76,10 +76,25 @@ def _price_from_jsonld(soup: BeautifulSoup) -> int | None:
 
 
 def _price_from_text(soup: BeautifulSoup) -> int | None:
-    full_text = soup.get_text(" ", strip=True)
-    m = re.search(r"(\d[\d\s]{2,7})\s*(?:руб|₽)", full_text, re.IGNORECASE)
-    if m:
-        return int(re.sub(r"\s", "", m.group(1)))
+    """Read the explicit price of the main product, not prices from catalog/menu/recommendations.
+
+    PSK currently labels the primary offer 'Цена от 3 156 руб.'.
+    An arbitrary first '1234 руб' on the whole page is unsafe.
+    """
+    heading = soup.find("h1")
+    if heading is None:
+        return None
+    page_text = soup.get_text(" ", strip=True)
+    title = heading.get_text(" ", strip=True)
+    start = page_text.find(title)
+    if start < 0:
+        return None
+    # Restrict to the section immediately after the product heading.
+    # Related products and delivery fees appear much later in the page.
+    product_text = page_text[start + len(title):start + len(title) + 1200]
+    match = re.search(r"Цена\s+от\s+(\d[\d\s\u00a0\u202f]*?)\s*(?:руб\.?|₽)", product_text, re.IGNORECASE)
+    if match:
+        return int(re.sub(r"\s", "", match.group(1)))
     return None
 
 
@@ -89,13 +104,13 @@ MIN_PLAUSIBLE_PRICE = 500  # лист фанеры 18мм реально не м
 
 def parse_sku_page(html: str) -> dict:
     soup = BeautifulSoup(html, "lxml")
-    price = _price_from_jsonld(soup)
-    if price is None or price < MIN_PLAUSIBLE_PRICE:
-        text_price = _price_from_text(soup)
-        if text_price is not None and text_price >= MIN_PLAUSIBLE_PRICE:
-            price = text_price
-        elif price is not None and price < MIN_PLAUSIBLE_PRICE:
-            price = None  # явно мусорное значение — лучше пропустить, чем показать неверную цену
+    # The visible primary product price takes precedence over potentially stale
+    # structured data. Never fall back to an arbitrary ruble amount on the page.
+    price = _price_from_text(soup)
+    if price is None:
+        price = _price_from_jsonld(soup)
+    if price is not None and price < MIN_PLAUSIBLE_PRICE:
+        price = None
     return {"price": price}
 
 
