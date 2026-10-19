@@ -172,14 +172,9 @@ async def scheduled_competitor_prices():
     Если хоть одна цена изменилась — шлёт уведомление в Telegram со стрелкой ↑/↓."""
     log.info("📊 Сбор цен конкурентов...")
     try:
-        from competitor_prices import collect_and_report_changes
-        text = collect_and_report_changes()
-        if text:
-            from telegram_reporter import _tg_send
-            _tg_send(text)
-            log.info("Обнаружены изменения цен конкурентов, уведомление отправлено")
-        else:
-            log.info("Цены конкурентов не изменились — уведомление не отправлено")
+        from competitor_prices import collect_and_notify_changes
+        sent = collect_and_notify_changes()
+        log.info("Проверка цен конкурентов завершена; уведомление отправлено: %s", sent)
     except Exception as e:
         log.error("Ошибка сбора цен конкурентов: %s", e)
 
