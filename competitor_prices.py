@@ -286,7 +286,6 @@ def build_rynok_report() -> str:
     lines = [f"<b>📊 Рынок · цены конкурентов на 18мм 2440x1220</b>",
               f"<i>{_now().strftime('%d.%m.%Y %H:%M')}</i>", ""]
 
-    errored = [r for r in rows if r["price_per_sheet"] is None]
     by_site: dict[str, list] = {}
     for (site, variant), snapshots in latest_by_key.items():
         by_site.setdefault(site, []).append((variant, snapshots))
