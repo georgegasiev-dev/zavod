@@ -6,6 +6,8 @@
 чтобы показывать разницу с прошлым запросом (↑/↓).
 """
 import sqlite3
+import threading
+from functools import wraps
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -172,8 +174,8 @@ def collect_and_save_if_due() -> bool:
         elapsed = (now - _last_manual_collect).total_seconds()
         if elapsed < _MANUAL_COLLECT_COOLDOWN_SECONDS:
             return False
-    _last_manual_collect = now
     collect_and_notify_changes()
+    _last_manual_collect = now
     return True
 
 
@@ -207,6 +209,17 @@ def collect_and_notify_changes() -> bool:
     return sent
 
 
+_collection_lock = threading.Lock()
+
+def _serialized_collection(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _collection_lock:
+            return fn(*args, **kwargs)
+    return wrapper
+
+
+@_serialized_collection
 def collect_and_report_changes() -> str | None:
     """
     Для ежедневной автоматической проверки (планировщик).
@@ -259,15 +272,6 @@ def collect_and_report_changes() -> str | None:
 def build_rynok_report() -> str:
     collect_and_notify_changes()
     conn = _get_conn()
-
-    valid_rows = []  # collection and persistence already completed by unified path
-    if valid_rows:
-        conn.executemany(
-            """INSERT INTO competitor_prices (site, variant, price_per_sheet, in_stock, parsed_at)
-               VALUES (:site, :variant, :price_per_sheet, :in_stock, :parsed_at)""",
-            valid_rows,
-        )
-        conn.commit()
 
     cur = conn.execute("""
         SELECT site, variant, price_per_sheet, in_stock, parsed_at
