@@ -826,6 +826,45 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
     owner_id     = tg_chat
     is_allowed   = chat_id == owner_id or chat_id in allowed_ids
 
+    # Notify the owner about every request from another Telegram account.
+    # Telegram does not expose the end-user's IP address to bots (webhook IP
+    # belongs to Telegram infrastructure). Never disclose /start passwords.
+    if chat_id and chat_id != owner_id:
+        from html import escape as _html_escape
+        from zoneinfo import ZoneInfo as _ZoneInfo
+        sender = (msg or {}).get("from") or {}
+        tg_chat_info = (msg or {}).get("chat") or {}
+        requested = text.strip()
+        if requested.lower().startswith("/start"):
+            requested = "/start [пароль скрыт]" if len(requested.split(maxsplit=1)) > 1 else "/start"
+        elif (msg or {}).get("voice"):
+            requested = "[голосовое сообщение]"
+        elif not requested:
+            requested = "[сообщение без текста]"
+        # Avoid huge Telegram messages and make user-provided text safe for HTML parse mode.
+        def _safe(value, limit=250):
+            return _html_escape(str(value if value is not None else "—")[:limit], quote=False)
+        user_name = " ".join(str(sender.get(k) or "") for k in ("first_name", "last_name")).strip() or "—"
+        username = ("@" + str(sender["username"])) if sender.get("username") else "—"
+        requester_id = sender.get("id", "—")
+        status_text = "доступ разрешён" if is_allowed else "доступ не разрешён"
+        event_time = datetime.now(_ZoneInfo("Europe/Moscow")).strftime("%d.%m.%Y %H:%M:%S")
+        _notify_owner(
+            "🔔 <b>Запрос к боту от другого пользователя</b>\n"
+            f"Время (МСК): {_safe(event_time)}\n"
+            f"Имя: {_safe(user_name)}\n"
+            f"Username: {_safe(username)}\n"
+            f"Telegram user ID: {_safe(requester_id)}\n"
+            f"Chat ID: {_safe(chat_id)}\n"
+            f"Тип чата: {_safe(tg_chat_info.get('type'))}\n"
+            f"Язык: {_safe(sender.get('language_code'))}\n"
+            f"Доступ: {_safe(status_text)}\n"
+            f"Запрос: <code>{_safe(requested, 500)}</code>\n"
+            "IP пользователя: недоступен через Telegram Bot API"
+        )
+        log.info("Non-owner Telegram bot request: user_id=%s chat_id=%s allowed=%s",
+                 requester_id, chat_id, is_allowed)
+
     # Обработка /start [пароль]
     if text.lower().startswith("/start"):
         parts    = text.split(maxsplit=1)
