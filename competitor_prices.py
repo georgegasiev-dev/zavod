@@ -7,6 +7,7 @@
 """
 import sqlite3
 import threading
+import logging
 from functools import wraps
 from pathlib import Path
 from datetime import datetime
@@ -157,11 +158,51 @@ def get_price_history() -> dict:
             "url": _URL_MAP.get((site, variant)),
             "days": days,  # {"2026-07-23": {"price": 2744, "in_stock": None}, ...}
         })
-    return {"positions": positions}
+    with _refresh_state_lock:
+        return {"positions": positions, "refreshing": _refresh_running,
+                "refresh_error": _refresh_error}
 
 
 _last_manual_collect: datetime | None = None
 _MANUAL_COLLECT_COOLDOWN_SECONDS = 120  # не чаще раза в 2 минуты на повторные клики "Обновить"
+_refresh_state_lock = threading.Lock()
+_refresh_running = False
+_refresh_error = None
+
+
+def start_price_refresh() -> bool:
+    """Reserve one background collection; readers never wait for source sites."""
+    global _refresh_running, _refresh_error
+    with _refresh_state_lock:
+        if _refresh_running:
+            return False
+        if (_last_manual_collect is not None and
+                (_now() - _last_manual_collect).total_seconds() < _MANUAL_COLLECT_COOLDOWN_SECONDS):
+            return False
+        _refresh_running = True
+        _refresh_error = None
+
+    def run():
+        global _refresh_running, _refresh_error
+        error = None
+        try:
+            collect_and_save_if_due()
+        except Exception:
+            logging.getLogger(__name__).exception("Background competitor price collection failed")
+            error = "Не удалось обновить цены. Показана сохранённая история."
+        finally:
+            with _refresh_state_lock:
+                _refresh_error = error
+                _refresh_running = False
+
+    worker = threading.Thread(target=run, name="competitor-price-refresh", daemon=True)
+    try:
+        worker.start()
+    except Exception:
+        with _refresh_state_lock:
+            _refresh_running = False
+        raise
+    return True
 
 
 def collect_and_save_if_due() -> bool:

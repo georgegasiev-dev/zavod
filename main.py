@@ -173,7 +173,7 @@ async def scheduled_competitor_prices():
     log.info("📊 Сбор цен конкурентов...")
     try:
         from competitor_prices import collect_and_notify_changes
-        sent = collect_and_notify_changes()
+        sent = await asyncio.to_thread(collect_and_notify_changes)
         log.info("Проверка цен конкурентов завершена; уведомление отправлено: %s", sent)
     except Exception as e:
         log.error("Ошибка сбора цен конкурентов: %s", e)
@@ -1094,7 +1094,7 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
         await reply("⏳ Собираю цены конкурентов, до 30 секунд...")
         try:
             from competitor_prices import build_rynok_report
-            await reply(build_rynok_report())
+            await reply(await asyncio.to_thread(build_rynok_report))
         except Exception as e:
             await reply(f"❌ Ошибка: {e}")
 
@@ -1285,14 +1285,11 @@ def competitor_prices_endpoint():
 
 @app.post("/api/competitor-prices/refresh")
 def competitor_prices_refresh_endpoint():
-    """Запускает живой парсинг всех сайтов конкурентов и сохраняет результат.
-    Открытый эндпоинт, как и чтение истории — но с дедупликацией 2 минуты,
-    чтобы повторные клики по кнопке «Обновить» не долбили сайты конкурентов
-    запросами на каждый клик."""
-    from competitor_prices import collect_and_save_if_due, get_price_history
-    saved = collect_and_save_if_due()
+    """Запускает сбор в фоне и сразу возвращает сохранённую историю."""
+    from competitor_prices import start_price_refresh, get_price_history
+    started = start_price_refresh()
     data = get_price_history()
-    data["refreshed"] = saved
+    data["refresh_started"] = started
     return data
 
 @app.get("/api/sync/status")
