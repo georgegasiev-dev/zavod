@@ -1,17 +1,9 @@
 """
 Парсер цен psk-holding.ru (ГК «ПромСтройКонтракт») — ламинированная фанера.
 
-ВАЖНО: страницы этого сайта (1C-Bitrix) отдают гигантское меню каталога
-перед основным контентом, из-за чего верстку карточки товара не удалось
-визуально проверить при написании парсера. Логика ниже использует два
-независимых способа найти цену:
-  1) структурированные данные Schema.org (JSON-LD, <script type="application/ld+json">
-     с "@type": "Product"/"Offer") — стандартный для интернет-магазинов способ,
-     не завязанный на конкретную вёрстку;
-  2) текстовый регекс на "цена ... руб" как запасной вариант.
-Если оба способа не сработают, товар просто не попадёт в отчёт (с WARN в лог) —
-это не уронит остальной сбор. Если после первого реального запуска выяснится,
-что цена не подхватилась, пришлите один прогон с выводом — поправим по месту.
+Основную цену читаем из #main_price. Поиск названия в тексте всей страницы
+может попасть в <title> перед большим меню и пропустить цену карточки.
+JSON-LD используется как запасной источник; цены похожих товаров не читаем.
 """
 import json
 import re
@@ -76,25 +68,22 @@ def _price_from_jsonld(soup: BeautifulSoup) -> int | None:
 
 
 def _price_from_text(soup: BeautifulSoup) -> int | None:
-    """Read the explicit price of the main product, not prices from catalog/menu/recommendations.
-
-    PSK currently labels the primary offer 'Цена от 3 156 руб.'.
-    An arbitrary first '1234 руб' on the whole page is unsafe.
-    """
-    heading = soup.find("h1")
-    if heading is None:
+    """Read only the primary offer, regardless of menu size or duplicate titles."""
+    offer = soup.find(id="main_price")
+    if offer is None:
         return None
-    page_text = soup.get_text(" ", strip=True)
-    title = heading.get_text(" ", strip=True)
-    start = page_text.find(title)
-    if start < 0:
-        return None
-    # Restrict to the section immediately after the product heading.
-    # Related products and delivery fees appear much later in the page.
-    product_text = page_text[start + len(title):start + len(title) + 1200]
+    value = offer.select_one(".price_value")
+    product_text = (value or offer).get_text(" ", strip=True)
     match = re.search(r"Цена\s+от\s+(\d[\d\s\u00a0\u202f]*?)\s*(?:руб\.?|₽)", product_text, re.IGNORECASE)
     if match:
         return int(re.sub(r"\s", "", match.group(1)))
+    # Some Bitrix templates expose the primary price only as Offer microdata.
+    meta = offer.find("meta", attrs={"itemprop": "price"})
+    if meta:
+        try:
+            return int(float(meta.get("content", "")))
+        except (TypeError, ValueError):
+            pass
     return None
 
 
