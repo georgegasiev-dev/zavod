@@ -529,7 +529,7 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(scheduled_sunday_sync, CronTrigger(day_of_week="sun", hour=23, minute=50),
                           id="sunday_sync", replace_existing=True)
     # Автосбор цен конкурентов — каждый день в 8:15 МСК (для таблицы "Ситуация на рынке")
-    scheduler.add_job(scheduled_competitor_prices, CronTrigger(hour=8, minute=15),
+    scheduler.add_job(scheduled_competitor_prices, CronTrigger(hour=8, minute=15, timezone="Europe/Moscow"),
                       id="competitor_prices", replace_existing=True)
     # Еженедельный бэкап БД — воскресенье 22:00 МСК
     scheduler.add_job(scheduled_db_backup, CronTrigger(day_of_week="sun", hour=22, minute=0),
@@ -2249,4 +2249,3 @@ async def mcp_messages(session_id: str, request: Request):
     return JSONResponse(response)
 
 # redeploy-trigger: 2026-06-10T04:14:47.875173
-
