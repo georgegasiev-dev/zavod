@@ -1284,10 +1284,12 @@ def competitor_prices_endpoint():
     return get_price_history()
 
 @app.post("/api/competitor-prices/refresh")
-def competitor_prices_refresh_endpoint():
+def competitor_prices_refresh_endpoint(source: str | None = None):
     """Запускает сбор в фоне и сразу возвращает сохранённую историю."""
     from competitor_prices import start_price_refresh, get_price_history
-    started = start_price_refresh()
+    if source not in (None, "fanera-msk.ru"):
+        raise HTTPException(status_code=400, detail="Неизвестный источник цен")
+    started = start_price_refresh(source=source)
     data = get_price_history()
     data["refresh_started"] = started
     return data
