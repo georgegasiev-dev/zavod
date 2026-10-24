@@ -357,8 +357,13 @@ def collect_and_report_changes() -> str | None:
         prev = prev_prices.get(key)
         if prev is not None and r["price_per_sheet"] is not None and prev != r["price_per_sheet"]:
             diff = r["price_per_sheet"] - prev
-            arrow = f"↑ +{diff}₽" if diff > 0 else f"↓ {diff}₽"
-            changed_lines.append(f"  {r['site']} — {r['variant']}: {prev}₽ → {r['price_per_sheet']}₽ ({arrow})")
+            percent = abs(diff) / prev * 100 if prev > 0 else None
+            arrow = f"↑ +{diff} ₽" if diff > 0 else f"↓ {diff} ₽"
+            percent_text = f", {percent:.1f}%" if percent is not None else ""
+            changed_lines.append(
+                f"  {r['site']} — {r['variant']}: "
+                f"{prev} ₽ → {r['price_per_sheet']} ₽ ({arrow}{percent_text})"
+            )
 
     if not changed_lines:
         return None
