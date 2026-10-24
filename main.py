@@ -552,7 +552,7 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
 
 app = FastAPI(title="Новатор — Платёжный мониторинг", version="1.0.0", lifespan=lifespan)
-security = HTTPBasic()
+security = HTTPBasic(auto_error=False)
 
 # CORS — разрешаем все источники явно
 app.add_middleware(
@@ -566,19 +566,55 @@ app.add_middleware(
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "")
 
-def verify_admin(creds: HTTPBasicCredentials = Depends(security), request: Request = None):
-    ok = (bool(ADMIN_PASS) and secrets.compare_digest(creds.username.encode(), ADMIN_USER.encode()) and
-          secrets.compare_digest(creds.password.encode(), ADMIN_PASS.encode()))
+def verify_admin(creds: HTTPBasicCredentials | None = Depends(security), request: Request = None):
+    """Validate credentials; audit genuine calendar sign-ins separately from API requests."""
+    username = creds.username if creds else ""
+    password = creds.password if creds else ""
+    ok = (
+        bool(ADMIN_PASS) and bool(creds)
+        and secrets.compare_digest(username.encode(), ADMIN_USER.encode())
+        and secrets.compare_digest(password.encode(), ADMIN_PASS.encode())
+    )
+    ip = (request.headers.get("x-forwarded-for") or
+          (request.client.host if request and request.client else "—")) if request else "—"
+    ip = str(ip).split(",")[0].strip()[:128]
+    user_agent = (request.headers.get("user-agent") or "—")[:512] if request else "—"
+    path = request.url.path if request else ""
+    # Keep legacy login-check URL working until every cached frontend is updated.
+    is_login = path in ("/api/auth/login", "/api/raiffeisen/status")
+    details = json.dumps({"username": username[:128] or "unknown", "user_agent": user_agent},
+                         ensure_ascii=False)
     if not ok:
-        ip = request.headers.get("x-forwarded-for", request.client.host if request and request.client else "—")
-        log_access("login_failed", ip, f"Пользователь: {creds.username}")
-        _notify_login(f"⚠️ <b>Неудачная попытка входа</b>\nПользователь: {creds.username}\nIP: {ip}", ip)
+        log_access("login_denied" if is_login else "auth_denied", ip, details)
+        if is_login:
+            from html import escape
+            _notify_login(f"⚠️ <b>Неудачная попытка входа</b>\\nПользователь: {escape(username[:128])}\\nIP: {escape(ip)}", ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             headers={"WWW-Authenticate": "Basic"})
-    ip = request.headers.get("x-forwarded-for", request.client.host if request and request.client else "—") if request else "—"
-    log_access("login_ok", ip, f"Пользователь: {creds.username}")
-    _notify_owner(f"🔑 <b>Вход в систему</b>\nПользователь: {creds.username}\nIP: {ip}")
-    return creds.username
+    if is_login:
+        log_access("login_success", ip, details)
+        from html import escape
+        _notify_owner(f"🔑 <b>Вход в систему</b>\\nПользователь: {escape(username[:128])}\\nIP: {escape(ip)}")
+    return username
+
+
+@app.post("/api/auth/login")
+def calendar_login(_: str = Depends(verify_admin)):
+    """Dedicated login validation used by the calendar frontend."""
+    return {"status": "ok"}
+
+
+@app.get("/api/auth/session")
+def calendar_session(_: str = Depends(verify_admin), request: Request = None):
+    """Audit a restored browser session distinctly from a new password login."""
+    ip = (request.headers.get("x-forwarded-for") or
+          (request.client.host if request and request.client else "—")) if request else "—"
+    ip = str(ip).split(",")[0].strip()[:128]
+    details = json.dumps({"username": _, "user_agent": (request.headers.get("user-agent") or "—")[:512]},
+                         ensure_ascii=False)
+    log_access("session_resume", ip, details)
+    return {"status": "ok"}
+
 
 # ── публичные эндпоинты ───────────────────────────────────────────────────────
 
@@ -617,7 +653,7 @@ def _notify_login(text: str, ip: str):
 
 
 @app.get("/api/data")
-def get_data(month: str = None, request: Request = None):
+def get_data(month: str = None, request: Request = None, _: str = Depends(verify_admin)):
     ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "—") if request else "—"
     log_access("view_data", ip, f"Месяц: {month or 'все'}")
     if month:
@@ -701,9 +737,9 @@ def get_logs(n: int = 100, _: str = Depends(verify_admin)):
 
 
 @app.get("/api/access-log")
-def get_access_log_endpoint(limit: int = 50, _: str = Depends(verify_admin)):
+def get_access_log_endpoint(limit: int = 50, only_logins: bool = False, before_id: int = None, _: str = Depends(verify_admin)):
     """История доступа к системе."""
-    rows = get_access_log(limit)
+    rows = get_access_log(limit=max(1, min(limit, 2000)), only_logins=only_logins, before_id=before_id)
     # Конвертируем UTC → МСК для отображения
     from datetime import timezone
     result = []
@@ -718,7 +754,7 @@ def get_access_log_endpoint(limit: int = 50, _: str = Depends(verify_admin)):
 
 
 @app.get("/api/plan")
-def get_plan_endpoint(month: str = "Июнь"):
+def get_plan_endpoint(month: str = "Июнь", _: str = Depends(verify_admin)):
     """Возвращает план для месяца. Если не задан — дефолтный."""
     plan = get_plan(month)
     if not plan:
@@ -727,13 +763,13 @@ def get_plan_endpoint(month: str = "Июнь"):
 
 
 @app.get("/api/plan/all")
-def get_all_plans_endpoint():
+def get_all_plans_endpoint(_: str = Depends(verify_admin)):
     """Возвращает планы по всем месяцам."""
     return get_all_plans()
 
 
 @app.post("/api/plan")
-async def save_plan_endpoint(request: Request):
+async def save_plan_endpoint(request: Request, _: str = Depends(verify_admin)):
     """Сохраняет план для месяца. Body: {month, plan: {...}}"""
     body = await request.json()
     month = body.get("month", "Июнь")
@@ -747,12 +783,12 @@ async def save_plan_endpoint(request: Request):
 
 
 @app.get("/api/obligations")
-def get_obligations_endpoint(month: str = "Июнь", year: int = 2026):
+def get_obligations_endpoint(month: str = "Июнь", year: int = 2026, _: str = Depends(verify_admin)):
     return {"year": year, "month": month, "obligations": get_obligations(year, month)}
 
 
 @app.post("/api/obligations")
-async def save_obligation_endpoint(request: Request):
+async def save_obligation_endpoint(request: Request, _: str = Depends(verify_admin)):
     body = await request.json()
     year     = int(body.get("year", 2026) or 2026)
     month    = body.get("month", "Июнь")
@@ -769,7 +805,7 @@ async def save_obligation_endpoint(request: Request):
     return {"status": "ok", "year": year, "month": month, "category": category}
 
 @app.get("/api/status")
-def get_status():
+def get_status(_: str = Depends(verify_admin)):
     return get_last_upload()
 
 @app.get("/api/health")
@@ -1498,7 +1534,7 @@ async def reclassify_op(
 
 # ── справочник контрагентов ───────────────────────────────────────────────────
 @app.get("/api/contractor-ops")
-def get_contractor_ops(name: str = ""):
+def get_contractor_ops(name: str = "", _: str = Depends(verify_admin)):
     """
     Все операции конкретного контрагента по всем месяцам — для карточки
     контрагента в справочнике. Матчинг по нормализованному имени (lower+strip),
@@ -1523,7 +1559,7 @@ def get_contractor_ops(name: str = ""):
 
 
 @app.get("/api/contractors")
-def get_contractors():
+def get_contractors(_: str = Depends(verify_admin)):
     """Полный справочник контрагентов с суммами из ops."""
     from database import get_contractor_mappings, get_all_months
     resolve_contractor_name = get_contractor_name_resolver()
@@ -1669,7 +1705,7 @@ async def raiffeisen_sync_status(job_id: str, _: str = Depends(verify_admin)):
 
 
 @app.get("/api/balance")
-async def get_account_balance():
+async def get_account_balance(_: str = Depends(verify_admin)):
     """Остаток на счёте после последней синхронизации."""
     from database import get_setting
     balance = get_setting("account_balance")
