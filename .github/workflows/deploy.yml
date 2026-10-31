@@ -29,7 +29,6 @@ jobs:
             cd /opt/zavod
             git pull --ff-only origin main
             systemctl restart zavod
-            echo "Deploy OK"
+            VERIFY_API_BASE=http://127.0.0.1:8000 VERIFY_USE_SERVICE_ENV=1 /opt/zavod/venv/bin/python3 verify_contractor_deployment.py
+            echo "Deploy verified"
 
-      - name: Verify counterparty consolidation and payment invariants
-        run: python verify_contractor_deployment.py
