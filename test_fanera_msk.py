@@ -140,7 +140,7 @@ class HistoryTests(unittest.TestCase):
                    'parsed_at': '2026-10-23T08:15:00+03:00'}
         with patch.object(prices, '_collect_rows', return_value=[changed]):
             report = prices.collect_and_report_changes()
-        self.assertIn('2612₽ → 2700₽', report)
+        self.assertIn('2612 ₽ → 2700 ₽', report)
         with patch.object(prices, '_collect_rows', return_value=[changed]):
             self.assertIsNone(prices.collect_and_report_changes())
 

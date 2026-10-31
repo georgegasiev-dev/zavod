@@ -557,14 +557,29 @@ security = HTTPBasic()
 # CORS — разрешаем все источники явно
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[origin.strip() for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS", "https://novator-frontend.vercel.app"
+    ).split(",") if origin.strip()],
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "HEAD", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "")
+
+def verify_api_access(creds: HTTPBasicCredentials = Depends(security)):
+    """Authenticate API traffic without sending a login notification per request."""
+    valid = (
+        bool(ADMIN_PASS)
+        and secrets.compare_digest(creds.username.encode(), ADMIN_USER.encode())
+        and secrets.compare_digest(creds.password.encode(), ADMIN_PASS.encode())
+    )
+    if not valid:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            headers={"WWW-Authenticate": "Basic"})
+    return creds.username
+
 
 def verify_admin(creds: HTTPBasicCredentials = Depends(security), request: Request = None):
     ok = (bool(ADMIN_PASS) and secrets.compare_digest(creds.username.encode(), ADMIN_USER.encode()) and
@@ -616,7 +631,7 @@ def _notify_login(text: str, ip: str):
     _notify_owner(text)
 
 
-@app.get("/api/data")
+@app.get("/api/data", dependencies=[Depends(verify_api_access)])
 def get_data(month: str = None, request: Request = None):
     ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "—") if request else "—"
     log_access("view_data", ip, f"Месяц: {month or 'все'}")
@@ -717,7 +732,7 @@ def get_access_log_endpoint(limit: int = 50, _: str = Depends(verify_admin)):
     return result
 
 
-@app.get("/api/plan")
+@app.get("/api/plan", dependencies=[Depends(verify_api_access)])
 def get_plan_endpoint(month: str = "Июнь"):
     """Возвращает план для месяца. Если не задан — дефолтный."""
     plan = get_plan(month)
@@ -726,13 +741,13 @@ def get_plan_endpoint(month: str = "Июнь"):
     return {"month": month, "plan": plan}
 
 
-@app.get("/api/plan/all")
+@app.get("/api/plan/all", dependencies=[Depends(verify_api_access)])
 def get_all_plans_endpoint():
     """Возвращает планы по всем месяцам."""
     return get_all_plans()
 
 
-@app.post("/api/plan")
+@app.post("/api/plan", dependencies=[Depends(verify_api_access)])
 async def save_plan_endpoint(request: Request):
     """Сохраняет план для месяца. Body: {month, plan: {...}}"""
     body = await request.json()
@@ -746,12 +761,12 @@ async def save_plan_endpoint(request: Request):
 
 
 
-@app.get("/api/obligations")
+@app.get("/api/obligations", dependencies=[Depends(verify_api_access)])
 def get_obligations_endpoint(month: str = "Июнь", year: int = 2026):
     return {"year": year, "month": month, "obligations": get_obligations(year, month)}
 
 
-@app.post("/api/obligations")
+@app.post("/api/obligations", dependencies=[Depends(verify_api_access)])
 async def save_obligation_endpoint(request: Request):
     body = await request.json()
     year     = int(body.get("year", 2026) or 2026)
@@ -768,7 +783,7 @@ async def save_obligation_endpoint(request: Request):
     )
     return {"status": "ok", "year": year, "month": month, "category": category}
 
-@app.get("/api/status")
+@app.get("/api/status", dependencies=[Depends(verify_api_access)])
 def get_status():
     return get_last_upload()
 
@@ -790,6 +805,12 @@ async def manual_report(_: str = Depends(verify_admin)):
 
 @app.post("/webhook/telegram")
 async def tg_webhook(request: Request):
+    expected_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    provided_secret = request.headers.get("x-telegram-bot-api-secret-token", "")
+    if not expected_secret or not secrets.compare_digest(
+        provided_secret.encode(), expected_secret.encode()
+    ):
+        raise HTTPException(status_code=403, detail="Forbidden")
     """Webhook endpoint — оставляем для совместимости, основная логика в _handle_tg_message."""
     import httpx
     tg_token = os.getenv("TG_TOKEN", "")
@@ -1005,36 +1026,7 @@ async def _handle_tg_message(chat_id: str, text: str, tg_chat: str, tg_token: st
             await reply(f"❌ Ошибка: {e}")
 
     elif (cmd == "/exec" or text.startswith("/exec ")) and chat_id == owner_id:
-        # Выполнение произвольной команды на сервере — только для владельца
-        command = text[6:].strip()  # убираем "/exec "
-        if not command:
-            await reply(
-                "Использование: /exec [команда]\n\n"
-                "Примеры:\n"
-                "/exec journalctl -u zavod -n 30 --no-pager\n"
-                "/exec systemctl restart zavod\n"
-                "/exec df -h\n"
-                "/exec cat /opt/zavod/.env | grep -v TOKEN | grep -v SECRET"
-            )
-        else:
-            try:
-                import subprocess
-                result = subprocess.run(
-                    command, shell=True,
-                    capture_output=True, text=True, timeout=30,
-                    cwd="/opt/zavod"
-                )
-                output = (result.stdout + result.stderr).strip()
-                if not output:
-                    output = "(нет вывода)"
-                # Telegram ограничивает сообщения 4096 символами
-                if len(output) > 3800:
-                    output = output[-3800:]  # берём конец
-                await reply(f"<pre>$ {command}\n{output}</pre>")
-            except subprocess.TimeoutExpired:
-                await reply("❌ Команда выполнялась слишком долго (>30 сек)")
-            except Exception as e:
-                await reply(f"❌ Ошибка: {e}")
+        await reply("Выполнение команд через Telegram отключено. Используйте SSH через VPN.")
 
     elif text.lower().startswith("/sub"):
         # Только владелец управляет рассылкой
@@ -1261,7 +1253,7 @@ async def manual_sync(_: str = Depends(verify_admin)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/eovr/sync")
+@app.post("/api/eovr/sync", dependencies=[Depends(verify_api_access)])
 async def eovr_sync_endpoint():
     """Принудительная синхронизация ЕОВР из Google Sheets. Открытый эндпоинт (данные публичные)."""
     result = await sync_eovr_all()
@@ -1270,20 +1262,20 @@ async def eovr_sync_endpoint():
     return result
 
 
-@app.get("/api/eovr/year/{year}")
+@app.get("/api/eovr/year/{year}", dependencies=[Depends(verify_api_access)])
 def eovr_year_endpoint(year: int):
     """Итоги ЕОВР по месяцам за год из кеша SQLite."""
     months = get_eovr_year(year)
     updated = get_eovr_latest_updated()
     return {"year": year, "months": months, "updated_at": updated}
 
-@app.get("/api/competitor-prices")
+@app.get("/api/competitor-prices", dependencies=[Depends(verify_api_access)])
 def competitor_prices_endpoint():
     """История цен конкурентов на фанеру по дням. Открытый эндпоинт (данные не финансовые)."""
     from competitor_prices import get_price_history
     return get_price_history()
 
-@app.post("/api/competitor-prices/refresh")
+@app.post("/api/competitor-prices/refresh", dependencies=[Depends(verify_api_access)])
 def competitor_prices_refresh_endpoint(source: str | None = None):
     """Запускает сбор в фоне и сразу возвращает сохранённую историю."""
     from competitor_prices import start_price_refresh, get_price_history
@@ -1497,7 +1489,7 @@ async def reclassify_op(
 
 
 # ── справочник контрагентов ───────────────────────────────────────────────────
-@app.get("/api/contractor-ops")
+@app.get("/api/contractor-ops", dependencies=[Depends(verify_api_access)])
 def get_contractor_ops(name: str = ""):
     """
     Все операции конкретного контрагента по всем месяцам — для карточки
@@ -1522,7 +1514,7 @@ def get_contractor_ops(name: str = ""):
     return {"ops": result}
 
 
-@app.get("/api/contractors")
+@app.get("/api/contractors", dependencies=[Depends(verify_api_access)])
 def get_contractors():
     """Полный справочник контрагентов с суммами из ops."""
     from database import get_contractor_mappings, get_all_months
@@ -1668,7 +1660,7 @@ async def raiffeisen_sync_status(job_id: str, _: str = Depends(verify_admin)):
     return job
 
 
-@app.get("/api/balance")
+@app.get("/api/balance", dependencies=[Depends(verify_api_access)])
 async def get_account_balance():
     """Остаток на счёте после последней синхронизации."""
     from database import get_setting
@@ -2189,7 +2181,7 @@ def _call_tool(name: str, args: dict) -> str:
 
 
 
-@app.get("/mcp/sse")
+@app.get("/mcp/sse", dependencies=[Depends(verify_api_access)])
 async def mcp_sse(request: Request):
     session_id = str(uuid.uuid4())
     queue: asyncio.Queue = asyncio.Queue()
@@ -2214,7 +2206,7 @@ async def mcp_sse(request: Request):
                                       "Access-Control-Allow-Origin":"*"})
 
 
-@app.post("/mcp/messages/{session_id}")
+@app.post("/mcp/messages/{session_id}", dependencies=[Depends(verify_api_access)])
 async def mcp_messages(session_id: str, request: Request):
     body = await request.json()
     method = body.get("method","")
@@ -2249,3 +2241,4 @@ async def mcp_messages(session_id: str, request: Request):
     return JSONResponse(response)
 
 # redeploy-trigger: 2026-06-10T04:14:47.875173
+
