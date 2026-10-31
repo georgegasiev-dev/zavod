@@ -300,8 +300,11 @@ def fetch_statements(date_from: str = None, date_to: str = None) -> bytes:
 def _send_excel_to_telegram(xlsx_bytes: bytes, date_from: str, date_to: str):
     """Отправляет Excel-файл выписки в Telegram."""
     import httpx, os
-    tg_token = os.getenv("TG_TOKEN", "8616497543:AAHo0UJBuRcbg-vElznHcIwkdBhL18DvVs0")
-    chat_id  = os.getenv("TG_CHAT_ID", "269628847")
+    tg_token = os.getenv("TG_TOKEN", "")
+    chat_id  = os.getenv("TG_CHAT_ID", "")
+    if not tg_token or not chat_id:
+        log.warning("Telegram statement delivery is not configured; skipping")
+        return
     filename = f"raiffeisen_{date_from}_{date_to}.xlsx"
     try:
         with httpx.Client(timeout=30) as client:
@@ -427,3 +430,4 @@ def fetch_and_load(date_from: str = None, date_to: str = None) -> dict:
 
     return {"processed": len(df), "ops_saved": total_ops, "months": months_updated,
             "reconciliation": recon}
+
