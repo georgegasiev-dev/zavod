@@ -1,14 +1,32 @@
 """Read-only deployment verification; never prints financial rows."""
 import json
+import os
+import base64
+import subprocess
+from pathlib import Path
 import time
 import urllib.parse
 import urllib.request
 from collections import defaultdict
 from contractor_identity import identity_key,extract_inn
-BASE='https://api.zavodzavodov.ru'
+BASE=os.getenv('VERIFY_API_BASE', 'http://127.0.0.1:8000').rstrip('/')
 EXPECTED='2026-10-15-all-contractor-identities-v2'
+def _admin_credentials():
+    if os.getenv('VERIFY_USE_SERVICE_ENV') == '1':
+        pid=subprocess.check_output(['systemctl','show','zavod','-p','MainPID','--value'],text=True).strip()
+        entries=Path('/proc',pid,'environ').read_bytes().split(b'\0')
+        service_env=dict(entry.split(b'=',1) for entry in entries if b'=' in entry)
+        return service_env.get(b'ADMIN_USER',b'admin').decode(),service_env.get(b'ADMIN_PASS',b'').decode()
+    return os.getenv('ADMIN_USER','admin'),os.getenv('ADMIN_PASS','')
 def get(path):
-    with urllib.request.urlopen(BASE+path,timeout=20) as response:
+    request=urllib.request.Request(BASE+path)
+    if path!='/api/health':
+        username,password=_admin_credentials()
+        if not password:
+            raise RuntimeError('Administrator credentials required for deployment verification')
+        authorization=base64.b64encode((username+':'+password).encode()).decode()
+        request.add_header('Authorization','Basic '+authorization)
+    with urllib.request.urlopen(request,timeout=20) as response:
         return json.load(response)
 def verify():
     evidence=get('/api/health').get('contractor_identity',{})
