@@ -3,8 +3,11 @@ import ast
 import asyncio
 import io
 import logging
+import json
+import types
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from security_logging import RedactingFormatter, redact
 
@@ -73,6 +76,46 @@ class SecurityBoundaryTests(unittest.TestCase):
         self.assertFalse(any(isinstance(node, ast.Assign) and any(
             isinstance(target, ast.Name) and target.id == 'DEFAULT_PLAN'
             for target in node.targets) for node in source.body))
+
+    def test_eovr_proxy_has_fixed_target_and_validates_titles(self):
+        source = ast.parse(Path(__file__).with_name('main.py').read_text(encoding='utf-8'))
+        node = next(n for n in source.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'fetch_private_eovr_sheet')
+        class HTTPError(Exception):
+            pass
+        class RouteError(Exception):
+            def __init__(self, status_code, detail):
+                self.status_code = status_code
+        requests = []
+        class Stream:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): pass
+            def raise_for_status(self): pass
+            async def aiter_bytes(self): yield b'{"sheets":[]}'
+        class Client:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): pass
+            def stream(self, method, url, params):
+                requests.append((method,url,params))
+                return Stream()
+        fake = types.SimpleNamespace(AsyncClient=lambda **kwargs: Client(), HTTPError=HTTPError)
+        scope = {'HTTPException':RouteError,'EOVR_API_KEY':'synthetic-key','EOVR_SHEET_ID':'configured-sheet','json':json,'log':types.SimpleNamespace(warning=lambda *args:None)}
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'<eovr-route-test>','exec'),scope)
+        with patch.dict('sys.modules', {'httpx':fake}):
+            result=asyncio.run(scope['fetch_private_eovr_sheet']("O'Brien 2026"))
+            self.assertEqual(result, {'sheets':[]})
+            self.assertTrue(requests[0][1].startswith('https://sheets.googleapis.com/v4/spreadsheets/configured-sheet/values/'))
+            self.assertIn('%27O%27%27Brien%202026%27%21A1%3AAA110',requests[0][1])
+            self.assertEqual(requests[0][2], {'key':'synthetic-key'})
+            for title in ['', 'x'*101, 'bad\x00title']:
+                with self.assertRaises(RouteError) as caught:
+                    asyncio.run(scope['fetch_private_eovr_sheet'](title))
+                self.assertEqual(caught.exception.status_code,400)
+            self.assertEqual(len(requests),1)
+            scope['EOVR_API_KEY']=''
+            with self.assertRaises(RouteError) as caught:
+                asyncio.run(scope['fetch_private_eovr_sheet']())
+            self.assertEqual(caught.exception.status_code,503)
+            self.assertEqual(len(requests),1)
 
 
 if __name__ == '__main__':
