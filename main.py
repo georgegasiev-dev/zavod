@@ -1250,6 +1250,49 @@ async def manual_sync(_: str = Depends(verify_admin)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def fetch_private_eovr_sheet(title=None):
+    """Read only the configured spreadsheet; credentials never reach the browser."""
+    import httpx
+    from urllib.parse import quote
+    if not EOVR_API_KEY:
+        raise HTTPException(status_code=503, detail="EOVR data source is not configured")
+    url = "https://sheets.googleapis.com/v4/spreadsheets/" + EOVR_SHEET_ID
+    params = {"key": EOVR_API_KEY}
+    if title is None:
+        params["fields"] = "sheets.properties"
+    else:
+        if not title.strip() or len(title) > 100 or any(ord(char) < 32 for char in title):
+            raise HTTPException(status_code=400, detail="Invalid sheet title")
+        range_name = "'" + title.replace("'", "''") + "'!A1:AA110"
+        url += "/values/" + quote(range_name, safe="")
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+            async with client.stream("GET", url, params=params) as response:
+                response.raise_for_status()
+                body = bytearray()
+                async for block in response.aiter_bytes():
+                    body.extend(block)
+                    if len(body) > 2 * 1024 * 1024:
+                        raise HTTPException(status_code=502, detail="EOVR response is too large")
+                data = json.loads(body)
+        if not isinstance(data, dict):
+            raise ValueError("Invalid spreadsheet response")
+        return data
+    except (httpx.HTTPError, ValueError):
+        log.warning("EOVR read failed; response and credentials omitted")
+        raise HTTPException(status_code=502, detail="EOVR data source unavailable")
+
+
+@app.get("/api/eovr/sheets", dependencies=[Depends(verify_api_access)])
+async def list_private_eovr_sheets():
+    return await fetch_private_eovr_sheet()
+
+
+@app.get("/api/eovr/sheet", dependencies=[Depends(verify_api_access)])
+async def get_private_eovr_sheet(title: str):
+    return await fetch_private_eovr_sheet(title)
+
+
 @app.post("/api/eovr/sync", dependencies=[Depends(verify_api_access)])
 async def eovr_sync_endpoint():
     """Принудительная синхронизация ЕОВР из Google Sheets. Открытый эндпоинт (данные публичные)."""
