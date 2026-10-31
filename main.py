@@ -31,6 +31,8 @@ from database import (save_month_data, merge_month_data, get_month_data, get_all
 
 
 logging.basicConfig(level=logging.INFO)
+from security_logging import install_security_logging
+install_security_logging()
 log = logging.getLogger("main")
 
 # ── планировщик ───────────────────────────────────────────────────────────────
@@ -581,6 +583,26 @@ def verify_api_access(creds: HTTPBasicCredentials = Depends(security)):
     return creds.username
 
 
+def load_private_ui_config():
+    path = os.path.join(os.path.dirname(__file__), "data", "ui-config.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            config = json.load(handle)
+        required = ("plan", "may_fact", "static_contractors", "client_colors", "backend_default_plan")
+        if not all(isinstance(config.get(key), dict) for key in required):
+            raise ValueError("Invalid private configuration")
+        if not isinstance(config.get("client_group_rules"), list):
+            raise ValueError("Invalid grouping rules")
+        return config
+    except (OSError, ValueError, TypeError):
+        raise HTTPException(status_code=503, detail="Private calendar configuration unavailable")
+
+
+@app.get("/api/ui-config", dependencies=[Depends(verify_api_access)])
+def get_private_ui_config():
+    return load_private_ui_config()
+
+
 def verify_admin(creds: HTTPBasicCredentials = Depends(security), request: Request = None):
     ok = (bool(ADMIN_PASS) and secrets.compare_digest(creds.username.encode(), ADMIN_USER.encode()) and
           secrets.compare_digest(creds.password.encode(), ADMIN_PASS.encode()))
@@ -644,32 +666,7 @@ def get_data(month: str = None, request: Request = None):
 # ── план ─────────────────────────────────────────────────────────────────────
 
 # Дефолтный план (Июнь 2026) — совпадает с STD во фронтенде
-DEFAULT_PLAN = {
-    "les":         [5000000,5000000,5000000,5000000,5000000],
-    "dolg_les":    [0,0,0,0,0],
-    "perev_les":   [250000,250000,250000,250000,250000],
-    "smola":       [1000000,2400000,1200000,1200000,1200000],
-    "plenka":      [0,2500000,0,0,3500000],
-    "gsm":         [250000,250000,250000,250000,250000],
-    "rashod":      [200000,200000,200000,200000,200000],
-    "svet":        [350000,350000,350000,500000,350000],
-    "vuvozmys":    [0,0,140000,0,140000],
-    "nds":         [0,0,0,0,0],
-    "ndfl":        [0,0,0,0,0],
-    "upakovka":    [0,0,0,0,0],
-    "perevozch":   [0,0,0,0,0],
-    "zp_avans":    [0,5600000,1000000,0,1000000],
-    "zp_ofic":     [0,0,0,0,0],
-    "zp_bolnich":  [100000,0,100000,0,100000],
-    "zp_shpon":    [931500,1150000,0,0,0],
-    "zp_av_shpon": [0,0,0,0,0],
-    "adm":         [0,0,0,0,0],
-    "arenda":      [50000,50000,50000,50000,50000],
-    "prochie":     [0,0,0,0,0],
-    "iz_pribyli":  [0,0,0,0,0],
-    "prikhod":     [11820000,11820000,11820000,11820000,11820000],
-    "proizvod":    [0,0,0,0,0],
-}
+# Default plans are loaded from the private server-only UI configuration.
 
 # Маппинг: название категории в ops → ключ в плане
 CAT_TO_PLAN_KEY = {
@@ -737,7 +734,7 @@ def get_plan_endpoint(month: str = "Июнь"):
     """Возвращает план для месяца. Если не задан — дефолтный."""
     plan = get_plan(month)
     if not plan:
-        plan = DEFAULT_PLAN
+        plan = load_private_ui_config()["backend_default_plan"]
     return {"month": month, "plan": plan}
 
 
@@ -1593,30 +1590,15 @@ async def update_contractor(
 # ── Raiffeisen API ────────────────────────────────────────────────────────────
 
 @app.get("/api/raiffeisen/auth")
-def raiffeisen_auth(_: str = Depends(verify_admin)):
-    """Шаг 1 — редирект на авторизацию в Райффайзен."""
-    from raiffeisen_api import get_auth_url
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(get_auth_url())
+def raiffeisen_auth(_: str = Depends(verify_api_access)):
+    """Browser OAuth is unavailable; the active connector uses configured refresh tokens."""
+    raise HTTPException(status_code=503, detail="Browser bank authorization is not configured")
 
 
 @app.get("/api/raiffeisen/callback")
-async def raiffeisen_callback(code: str = None, state: str = None, error: str = None):
-    """Шаг 2 — получаем code и обмениваем на токен."""
-    if error:
-        return {"status": "error", "error": error}
-    if not code:
-        return {"status": "error", "detail": "Нет authorization code"}
-    try:
-        from raiffeisen_api import exchange_code
-        token = exchange_code(code)
-        return {
-            "status": "ok",
-            "message": "✅ Авторизация прошла успешно! Выписки теперь будут загружаться автоматически.",
-            "expires_in": token.get("expires_in"),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def raiffeisen_callback():
+    """Reject the obsolete callback without consuming or reflecting OAuth parameters."""
+    raise HTTPException(status_code=410, detail="Browser bank authorization callback is disabled")
 
 
 # Хранилище статусов фоновых задач синхронизации
