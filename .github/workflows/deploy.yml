@@ -17,7 +17,7 @@ jobs:
       - name: Verify catalog parsing and price history before deployment
         run: |
           pip install requests==2.32.3 beautifulsoup4==4.12.3 lxml==5.2.2
-          python -m unittest test_fanera_msk test_competitor_refresh test_psk_holding -v
+          python -m unittest test_fanera_msk test_competitor_refresh test_psk_holding test_security_boundary -v
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
