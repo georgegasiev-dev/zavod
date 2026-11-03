@@ -28,11 +28,6 @@ jobs:
             import telegram_reporter as reporter
             from database import get_all_months
             print(json.dumps({'replica': bool(os.getenv('REPLICA_OF')), 'carrier_details_enabled': 'Перевозчик' in reporter.DETAIL_CATS, 'reporter_path': reporter.__file__}))
-            token = os.getenv('TG_TOKEN','')
-            if token:
-                with urllib.request.urlopen('https://api.telegram.org/bot'+token+'/getMe', timeout=15) as r:
-                    bot=json.load(r)
-                print(json.dumps({'bot_username': bot.get('result',{}).get('username'), 'telegram_ok':bot.get('ok')}))
             text=reporter.build_babki_report()
             lines=text.splitlines()
             carrier_lines=[i for i,l in enumerate(lines) if l.lstrip().startswith(('Перевозчик ', 'Перевозчики '))]
