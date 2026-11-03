@@ -1,0 +1,75 @@
+name: Verify Telegram bot runtime
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/verify-bot-runtime.yml']
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect current deployment target
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/zavod
+            echo "source_revision=$(git rev-parse HEAD)"
+            echo "service_state=$(systemctl is-active zavod)"
+            /opt/zavod/venv/bin/python3 - <<'PY'
+            import os, subprocess, json, urllib.request
+            from pathlib import Path
+            pid = subprocess.check_output(['systemctl','show','zavod','-p','MainPID','--value'], text=True).strip()
+            env = dict(e.split(b'=',1) for e in Path('/proc',pid,'environ').read_bytes().split(b'\0') if b'=' in e)
+            for key, value in env.items():
+                os.environ[key.decode()] = value.decode()
+            import telegram_reporter as reporter
+            from database import get_all_months
+            print(json.dumps({'replica': bool(os.getenv('REPLICA_OF')), 'carrier_details_enabled': 'Перевозчик' in reporter.DETAIL_CATS, 'reporter_path': reporter.__file__}))
+            token = os.getenv('TG_TOKEN','')
+            if token:
+                with urllib.request.urlopen('https://api.telegram.org/bot'+token+'/getMe', timeout=15) as r:
+                    bot=json.load(r)
+                print(json.dumps({'bot_username': bot.get('result',{}).get('username'), 'telegram_ok':bot.get('ok')}))
+            text=reporter.build_babki_report()
+            lines=text.splitlines()
+            carrier_lines=[i for i,l in enumerate(lines) if l.lstrip().startswith(('Перевозчик ', 'Перевозчики '))]
+            print(json.dumps({'babki_carrier_categories': len(carrier_lines), 'babki_carrier_details': [i+1<len(lines) and lines[i+1].startswith('    ') for i in carrier_lines]}))
+            categories=sorted({str(op.get('cat','')) for data in get_all_months().values() for op in (data or {}).get('ops',[]) if 'перевоз' in str(op.get('cat','')).lower()})
+            print(json.dumps({'carrier_category_spellings': categories},ensure_ascii=False))
+            PY
+      - name: Inspect Telegram bot server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 45.8.98.214
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/zavod
+            echo "source_revision=$(git rev-parse HEAD)"
+            echo "service_state=$(systemctl is-active zavod)"
+            /opt/zavod/venv/bin/python3 - <<'PY'
+            import os, subprocess, json, urllib.request
+            from pathlib import Path
+            pid = subprocess.check_output(['systemctl','show','zavod','-p','MainPID','--value'], text=True).strip()
+            env = dict(e.split(b'=',1) for e in Path('/proc',pid,'environ').read_bytes().split(b'\0') if b'=' in e)
+            for key, value in env.items():
+                os.environ[key.decode()] = value.decode()
+            import telegram_reporter as reporter
+            from database import get_all_months
+            print(json.dumps({'replica': bool(os.getenv('REPLICA_OF')), 'carrier_details_enabled': 'Перевозчик' in reporter.DETAIL_CATS, 'reporter_path': reporter.__file__}))
+            token = os.getenv('TG_TOKEN','')
+            if token:
+                with urllib.request.urlopen('https://api.telegram.org/bot'+token+'/getMe', timeout=15) as r:
+                    bot=json.load(r)
+                print(json.dumps({'bot_username': bot.get('result',{}).get('username'), 'telegram_ok':bot.get('ok')}))
+            text=reporter.build_babki_report()
+            lines=text.splitlines()
+            carrier_lines=[i for i,l in enumerate(lines) if l.lstrip().startswith(('Перевозчик ', 'Перевозчики '))]
+            print(json.dumps({'babki_carrier_categories': len(carrier_lines), 'babki_carrier_details': [i+1<len(lines) and lines[i+1].startswith('    ') for i in carrier_lines]}))
+            categories=sorted({str(op.get('cat','')) for data in get_all_months().values() for op in (data or {}).get('ops',[]) if 'перевоз' in str(op.get('cat','')).lower()})
+            print(json.dumps({'carrier_category_spellings': categories},ensure_ascii=False))
+            PY
