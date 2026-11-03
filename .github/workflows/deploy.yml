@@ -18,6 +18,13 @@ jobs:
         run: |
           pip install requests==2.32.3 beautifulsoup4==4.12.3 lxml==5.2.2
           python -m unittest test_fanera_msk test_competitor_refresh test_psk_holding test_security_boundary test_telegram_reporter -v
+      - name: Read public half of existing deployment key
+        env:
+          ZAVOD_DEPLOY_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$ZAVOD_DEPLOY_KEY" > "$RUNNER_TEMP/zavod_deploy_key"
+          ssh-keygen -y -f "$RUNNER_TEMP/zavod_deploy_key"
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
