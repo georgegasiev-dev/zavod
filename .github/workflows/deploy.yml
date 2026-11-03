@@ -31,9 +31,4 @@ jobs:
             systemctl restart zavod
             VERIFY_API_BASE=http://127.0.0.1:8000 VERIFY_USE_SERVICE_ENV=1 /opt/zavod/venv/bin/python3 verify_contractor_deployment.py
             /opt/zavod/venv/bin/python3 verify_telegram_report_deployment.py
-            if ssh -i /root/.ssh/github_deploy -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 root@45.8.98.214 true >/dev/null 2>&1; then
-              echo "Secondary server existing-key access: available"
-            else
-              echo "Secondary server existing-key access: unavailable"
-            fi
             echo "Deploy verified"
