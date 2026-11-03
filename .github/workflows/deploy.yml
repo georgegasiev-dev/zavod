@@ -17,7 +17,7 @@ jobs:
       - name: Verify catalog parsing and price history before deployment
         run: |
           pip install requests==2.32.3 beautifulsoup4==4.12.3 lxml==5.2.2
-          python -m unittest test_fanera_msk test_competitor_refresh test_psk_holding test_security_boundary -v
+          python -m unittest test_fanera_msk test_competitor_refresh test_psk_holding test_security_boundary test_telegram_reporter -v
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -31,4 +31,3 @@ jobs:
             systemctl restart zavod
             VERIFY_API_BASE=http://127.0.0.1:8000 VERIFY_USE_SERVICE_ENV=1 /opt/zavod/venv/bin/python3 verify_contractor_deployment.py
             echo "Deploy verified"
-
